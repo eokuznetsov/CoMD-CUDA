@@ -257,5 +257,5 @@ void atomsUpdateLocalId(LinkCell* boxes, Atoms* atoms)
               count++;
       }
    }
-   assert(count < atoms->neighborList->nMaxLocal);
+   assert(count <= atoms->neighborList->nMaxLocal);
 }

@@ -208,7 +208,7 @@ int eamForceGpu(SimFlat* s)
      eamForce2GpuAsync(s->gpu, s->gpu.b_list, s->n_boundary_cells, s->boundary_cells, s->method, s->boundary_stream, s->spline);
 
      // we need boundary data before halo exchange
-     cudaStreamSynchronize(s->boundary_stream);
+     hipStreamSynchronize(s->boundary_stream);
 
      // now we can start step 3 on the interior
      int n_interior_cells = s->gpu.boxes.nLocalBoxes - s->n_boundary_cells;
@@ -226,7 +226,7 @@ int eamForceGpu(SimFlat* s)
 //     eamForce1GpuAsync(s->gpu, s->gpu.b_list, s->n_boundary_cells, s->boundary_cells, s->method, s->boundary_stream);
 //     eamForce2GpuAsync(s->gpu, s->gpu.i_list, n_interior_cells, s->interior_cells, s->method, s->boundary_stream);
 //     eamForce2GpuAsync(s->gpu, s->gpu.b_list, s->n_boundary_cells, s->boundary_cells, s->method, s->boundary_stream);
-//     cudaStreamSynchronize(s->boundary_stream);
+//     hipStreamSynchronize(s->boundary_stream);
 
 
      eamForce1Gpu(s->gpu,s->method, s->spline);
@@ -247,13 +247,13 @@ int eamForceGpu(SimFlat* s)
 
      if (s->gpuAsync) {
        // we need updated interior data before 3rd step
-       cudaStreamSynchronize(s->boundary_stream);
+       hipStreamSynchronize(s->boundary_stream);
      }
  
      if (s->gpuAsync) {
        // interior stream already launched
        eamForce3GpuAsync(s->gpu, s->gpu.b_list, s->n_boundary_cells, s->boundary_cells, s->method, s->boundary_stream, s->spline);
-       cudaDeviceSynchronize();
+       hipDeviceSynchronize();
      }
      else {
        eamForce3Gpu(s->gpu,s->method, s->spline);
@@ -272,10 +272,10 @@ int eamForceCpuNL(SimFlat* s)
    if (pot->forceExchange == NULL)
    {
       int maxTotalAtoms = MAXATOMS*s->boxes->nTotalBoxes;
-      pot->dfEmbed = comdMalloc(maxTotalAtoms*sizeof(real_t));
-      pot->rhobar  = comdMalloc(maxTotalAtoms*sizeof(real_t));
+      pot->dfEmbed = (real_t*)comdMalloc(maxTotalAtoms*sizeof(real_t));
+      pot->rhobar  = (real_t*)comdMalloc(maxTotalAtoms*sizeof(real_t));
       pot->forceExchange = initForceHaloExchange(s->domain, s->boxes,s->method<CPU_NL);
-      pot->forceExchangeData = comdMalloc(sizeof(ForceExchangeData));
+      pot->forceExchangeData = (ForceExchangeData*)comdMalloc(sizeof(ForceExchangeData));
       pot->forceExchangeData->dfEmbed = pot->dfEmbed;
       pot->forceExchangeData->boxes = s->boxes;
    }
@@ -424,10 +424,10 @@ void eamPrint(FILE* file, BasePotential* pot)
    fprintf(file, "  Potential type  : EAM\n");
    fprintf(file, "  Species name    : %s\n", eamPot->name);
    fprintf(file, "  Atomic number   : %d\n", eamPot->atomicNo);
-   fprintf(file, "  Mass            : "FMT1" amu\n", eamPot->mass/amuToInternalMass); // print in amu
+   fprintf(file, "  Mass            : " FMT1 " amu\n", eamPot->mass/amuToInternalMass); // print in amu
    fprintf(file, "  Lattice type    : %s\n", eamPot->latticeType);
-   fprintf(file, "  Lattice spacing : "FMT1" Angstroms\n", eamPot->lat);
-   fprintf(file, "  Cutoff          : "FMT1" Angstroms\n", eamPot->cutoff);
+   fprintf(file, "  Lattice spacing : " FMT1 " Angstroms\n", eamPot->lat);
+   fprintf(file, "  Cutoff          : " FMT1 " Angstroms\n", eamPot->cutoff);
 }
 
 void eamDestroy(BasePotential** pPot)

@@ -34,6 +34,7 @@ typedef struct CommandSt
 
    int gpuAsync;	//!< communication latency hiding optimization using streams
    int gpuProfile;	//!< skip redistribute routines and run only one step of compute forces
+   int singleGpuInstanceId;
 
    int ljInterpolation; //!< compute Lennard-Jones potential using interpolation
    int spline;

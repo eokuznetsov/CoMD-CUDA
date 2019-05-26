@@ -23,11 +23,32 @@
 
 /// The maximum number of atoms that can be stored in a link cell.
 //Moved to the Makefile
-//#define MAXATOMS 256 
+#define MAXATOMS 256
 
-#define WARP_SIZE		32
+#ifdef AMD_PLATFORM
+#define WARP_SIZE 64
+#define THREAD_ATOM_CTA     256
+#define WARP_ATOM_CTA		256
+#define CTA_CELL_CTA		256
 
-#define THREAD_ATOM_CTA         128
+// NOTE: the following is tuned for GK110
+#ifdef COMD_DOUBLE
+#define THREAD_ATOM_ACTIVE_CTAS 	10*8
+#define WARP_ATOM_ACTIVE_CTAS 		12*8
+#define CTA_CELL_ACTIVE_CTAS 		10*8
+#define WARP_ATOM_NL_CTAS            9*8
+#else
+// 100% occupancy for SP
+#define THREAD_ATOM_ACTIVE_CTAS 	16*8
+#define WARP_ATOM_ACTIVE_CTAS 		16*8
+#define CTA_CELL_ACTIVE_CTAS 		16*8
+#define WARP_ATOM_NL_CTAS           16*8
+#endif
+#endif
+
+#ifdef NVIDIA_PLATFORM
+#define WARP_SIZE 32
+#define THREAD_ATOM_CTA     128
 #define WARP_ATOM_CTA		128
 #define CTA_CELL_CTA		128
 
@@ -36,13 +57,14 @@
 #define THREAD_ATOM_ACTIVE_CTAS 	10	// 62%
 #define WARP_ATOM_ACTIVE_CTAS 		12	// 75%
 #define CTA_CELL_ACTIVE_CTAS 		10	// 62%
-#define WARP_ATOM_NL_CTAS            9  // 56%
+#define WARP_ATOM_NL_CTAS            9    // 56%
 #else
 // 100% occupancy for SP
 #define THREAD_ATOM_ACTIVE_CTAS 	16
 #define WARP_ATOM_ACTIVE_CTAS 		16
 #define CTA_CELL_ACTIVE_CTAS 		16
 #define WARP_ATOM_NL_CTAS           16
+#endif
 #endif
 
 //log_2(x)
@@ -69,7 +91,7 @@
 
 //size of shared memory used in cta_cell kernel for Lennard-Jones
 //it can't be less than CTA_CELL_CTA
-#define SHARED_SIZE_CTA_CELL 128 
+#define SHARED_SIZE_CTA_CELL CTA_CELL_CTA
 
 //Number of atoms covered by a single entry of pairlist
 //Cannot be bigger than 1024 (resulting in 32x32 blocks)

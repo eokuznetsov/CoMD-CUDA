@@ -221,7 +221,7 @@ void redistributeAtoms(SimFlat* sim)
 
 void redistributeAtomsGpu(SimFlat* sim)
 {
-    cudaMemset(sim->gpu.boxes.nAtoms + sim->boxes->nLocalBoxes, 0, (sim->boxes->nTotalBoxes - sim->boxes->nLocalBoxes) * sizeof(int));
+    hipMemset(sim->gpu.boxes.nAtoms + sim->boxes->nLocalBoxes, 0, (sim->boxes->nTotalBoxes - sim->boxes->nLocalBoxes) * sizeof(int));
 
    if(sim->usePairlist)
    {
@@ -303,7 +303,7 @@ void redistributeAtomsGpuNL(SimFlat* sim)
    haloExchange(sim->atomExchange, sim);
    stopTimer(atomHaloTimer);
 
-#ifdef DEBUG
+#if defined(DEBUG) && defined(DO_MPI) 
    //count the number of interior particles on each process and sum them up
    int *nAtomsGPU  = (int*) malloc(sizeof(int) * sim->boxes->nTotalBoxes);
    cudaCopyDtH(nAtomsGPU, sim->gpu.boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int));
@@ -326,7 +326,7 @@ void redistributeAtomsGpuNL(SimFlat* sim)
    free(nAtomsGPU);
 #endif
    int haloExchangeRequired=0;
-   cudaMemcpy(&haloExchangeRequired, sim->gpu.d_updateLinkCellsRequired,sizeof(int), cudaMemcpyDeviceToHost); //TODO Async? boundary_stream
+   hipMemcpy(&haloExchangeRequired, sim->gpu.d_updateLinkCellsRequired,sizeof(int), hipMemcpyDeviceToHost); //TODO Async? boundary_stream
    int flag = 0; //indicates if any particle has migrated from one processor to the other 
    //sync boundary stream TODO
    addIntParallel(&haloExchangeRequired, &flag, 1); 
@@ -347,7 +347,7 @@ void redistributeAtomsGpuNL(SimFlat* sim)
            haloExchange(sim->atomExchange, sim);
            stopTimer(atomHaloTimer);
 
-           cudaMemset(sim->gpu.d_updateLinkCellsRequired,0,sizeof(int));
+           hipMemset(sim->gpu.d_updateLinkCellsRequired,0,sizeof(int));
    }
 
    buildAtomListGpu(sim, sim->boundary_stream);

@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -53,7 +54,7 @@ __global__ void ReduceEnergy(SimGpu sim, real_t *e_pot, real_t *e_kin)
   sp[threadIdx.x] = ep;
   sk[threadIdx.x] = ek;
   __syncthreads();
-  for (int i = THREAD_ATOM_CTA / 2; i >= 32; i /= 2) {
+  for (int i = THREAD_ATOM_CTA / 2; i >= WARP_SIZE; i /= 2) {
     if (threadIdx.x < i) {
       sp[threadIdx.x] += sp[threadIdx.x + i];
       sk[threadIdx.x] += sk[threadIdx.x + i];
@@ -62,8 +63,8 @@ __global__ void ReduceEnergy(SimGpu sim, real_t *e_pot, real_t *e_kin)
   }
   
   // reduce in warp
-  if (threadIdx.x < 32) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 300
+  if (threadIdx.x < WARP_SIZE) {
+#if __HIP_ARCH_HAS_WARP_SHUFFLE__
     ep = sp[threadIdx.x];
     ek = sk[threadIdx.x];
     for (int i = WARP_SIZE / 2; i > 0; i /= 2) {

@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -29,7 +30,9 @@
 // templated for the 1st and 3rd EAM passes
 template<int step, bool spline>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(WARP_ATOM_CTA, WARP_ATOM_ACTIVE_CTAS)
+#endif
 void EAM_Force_warp_atom(SimGpu sim, AtomListGpu list)
 {
   // warp & lane ids
@@ -90,14 +93,14 @@ void EAM_Force_warp_atom(SimGpu sim, AtomListGpu list)
     // aggregate neighbors that passes cut-off check
     // warp-scan using ballot/popc 
     uint flag = (r2 <= rCut2 && r2 > 0 && j < numNeigh);  // flag(lane id) 
-    uint bits = __ballot(flag);                           // 0 1 0 1  1 1 0 0 = flag(0) flag(1) .. flag(31)
-    uint mask = bfi(0, 0xffffffff, 0, lane_id);           // bits < lane id = 1, bits > lane id = 0
-    uint exc = __popc(mask & bits);                       // exclusive scan 
+    unsigned long long int bits = __ballot(flag);                               // 0 1 0 1  1 1 0 0 = flag(0) flag(1) .. flag(31)
+    unsigned long long int mask = (((unsigned long long int)1) << lane_id) - 1; // bits < lane id = 1, bits > lane id = 0
+    uint exc = __popcll(mask & bits);                                           // exclusive scan
 
     if (flag) 
       nl_off[warpTotal + exc] = jOff;     		  // fill nl array - compacted
 
-    warpTotal += __popc(bits);                            // total 1s per warp
+    warpTotal += __popcll(bits);                            // total 1s per warp
 
     // move on to the next neighbor atom
     j += WARP_SIZE;
@@ -184,7 +187,9 @@ void EAM_Force_warp_atom(SimGpu sim, AtomListGpu list)
 /// templated for the 1st and 3rd EAM passes using the neighborlist
 template<int step, int packSize, int maxNeighbors, bool spline>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, WARP_ATOM_NL_CTAS)
+#endif
 void EAM_Force_warp_atom_NL(SimGpu sim, AtomListGpu list, real_t rCut2)
 {
     int tid = (blockIdx.x * blockDim.x + threadIdx.x)/packSize; 
@@ -240,7 +245,7 @@ void EAM_Force_warp_atom_NL(SimGpu sim, AtomListGpu list, real_t rCut2)
 
         if(current < nNeighbors)
         {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
             dx = irx - __ldg(&rx[jOff]);
             dy = iry - __ldg(&ry[jOff]);
             dz = irz - __ldg(&rz[jOff]);
@@ -305,9 +310,9 @@ void EAM_Force_warp_atom_NL(SimGpu sim, AtomListGpu list, real_t rCut2)
     } // loop over neighbor-list
 
     //Reduction inside warp
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 300
+#if __HIP_ARCH_HAS_WARP_SHUFFLE__
 #pragma unroll
-    for(int j = 1; j < 32; j *= 2)
+    for(int j = 1; j < WARP_SIZE; j *= 2)
     {
         if(packSize > j)
         {
@@ -328,7 +333,7 @@ void EAM_Force_warp_atom_NL(SimGpu sim, AtomListGpu list, real_t rCut2)
     }
 #else
     __shared__ real_t smem[THREAD_ATOM_CTA];
-    for(int j = 1; j < 32; j *= 2)
+    for(int j = 1; j < WARP_SIZE; j *= 2)
     {
         if(packSize > j)
         {

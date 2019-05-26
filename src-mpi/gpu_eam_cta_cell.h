@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -33,12 +34,14 @@
 // 1 warp processes 1 atom
 template<int step, bool spline>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(CTA_CELL_CTA, CTA_CELL_ACTIVE_CTAS)
+#endif
 void EAM_Force_cta_cell(SimGpu sim, int *cells_list)
 {
   // warp & lane ids
-  int warp_id = get_warp_id();
-  int lane_id = get_lane_id();
+  int warp_id = threadIdx.x / WARP_SIZE;
+  int lane_id = threadIdx.x & (WARP_SIZE - 1);
 
   // cell id = CUDA block id
   int iBox = (cells_list == NULL) ? blockIdx.x : cells_list[blockIdx.x];
@@ -48,7 +51,7 @@ void EAM_Force_cta_cell(SimGpu sim, int *cells_list)
   int nneigh = sim.num_neigh_atoms[iBox];
 
   // distribute smem
-  extern __shared__ real_t smem[];
+  HIP_DYNAMIC_SHARED( real_t, smem)
 
   // neighbor positions
   volatile real_t *rx = smem;
@@ -156,15 +159,15 @@ void EAM_Force_cta_cell(SimGpu sim, int *cells_list)
 
 	  // aggregate neighbors that passes cut-off check
 	  // warp-scan using ballot/popc 	
-	  uint flag = (r2 <= rCut2 && r2 > 0 && (tail == 0 || j < tail));  // flag(lane id) 
-	  uint bits = __ballot(flag);                           // 0 1 0 1  1 1 0 0 = flag(0) flag(1) .. flag(31)
-	  uint mask = bfi(0, 0xffffffff, 0, lane_id);         // bits < lane id = 1, bits > lane id = 0
-	  uint exc = __popc(mask & bits);                       // exclusive scan 
+	  uint flag = (r2 <= rCut2 && r2 > 0 && (tail == 0 || j < tail));  // flag(lane id)
+          unsigned long long int bits = __ballot(flag);                                // 0 1 0 1  1 1 0 0 = flag(0) flag(1) .. flag(31)
+          unsigned long long int mask = (((unsigned long long int)1) << lane_id) - 1;  // bits < lane id = 1, bits > lane id = 0
+          uint exc = __popcll(mask & bits);                                            // exclusive scan
 
 	  if (flag) 
 	    nl_off[warpTotal + exc] = j; 	    		  // fill nl array - compacted
 
-	  warpTotal += __popc(bits);                            // total 1s per warp
+	  warpTotal += __popcll(bits);                            // total 1s per warp
 	} // compute neighbor lists
 
 	for (int neighbor_id = lane_id; neighbor_id < warpTotal; neighbor_id += WARP_SIZE)
@@ -191,7 +194,7 @@ void EAM_Force_cta_cell(SimGpu sim, int *cells_list)
               // TODO: this is not optimal
               interpolate(sim.eam_pot.rho, r, rhoTmp, dRho);
               int iOff = iBox * MAXATOMS + iAtom;
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
               dPhi = (__ldg(sim.eam_pot.dfEmbed + iOff) + fe[j]) * dRho;
 #else
               dPhi = (sim.eam_pot.dfEmbed[iOff] + fe[j]) * dRho;
@@ -211,7 +214,7 @@ void EAM_Force_cta_cell(SimGpu sim, int *cells_list)
               // TODO: this is not optimal
               interpolateSpline(sim.eam_pot.rhoS, r2, rhoTmp, dRho);
               int iOff = iBox * MAXATOMS + iAtom;
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
               dPhi = (__ldg(sim.eam_pot.dfEmbed + iOff) + fe[j]) * dRho;
 #else
               dPhi = (sim.eam_pot.dfEmbed[iOff] + fe[j]) * dRho;

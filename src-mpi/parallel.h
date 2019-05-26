@@ -39,7 +39,7 @@ int sendReceiveParallel(void* sendBuf, int sendLen, int dest,
                         void* recvBuf, int recvLen, int source);
 
 /// Wrapper for MPI_Allreduce integer sum.
-void addIntParallel(int* sendBuf, int* recvBuf, int count);
+extern "C" void addIntParallel(int* sendBuf, int* recvBuf, int count);
 
 /// Wrapper for MPI_Allreduce real sum.
 void addRealParallel(real_t* sendBuf, real_t* recvBuf, int count);

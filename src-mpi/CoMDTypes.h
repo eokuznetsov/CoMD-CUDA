@@ -22,7 +22,12 @@
   #define EXTERN_C extern "C"
 #else
   // use c99 for linux
-  #define EXTERN_C extern
+  //#define EXTERN_C extern
+#if defined(__HCC__)
+#define EXTERN_C
+#else
+#define EXTERN_C extern "C"
+#endif
 #endif
 
 struct SimFlatSt;
@@ -113,8 +118,8 @@ typedef struct SimFlatSt
    int *boundary1_cells_h;	//<! boundary cells that are neighbors to halos (outer ring of the local Cells)
 
    // streams for async execution
-   cudaStream_t boundary_stream;	
-   cudaStream_t interior_stream;
+   hipStream_t boundary_stream;	
+   hipStream_t interior_stream;
 
    // gpu options
    int gpuAsync;

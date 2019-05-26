@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -27,7 +28,9 @@
  ************************************************************************/
 
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, THREAD_ATOM_ACTIVE_CTAS)
+#endif
 void LJ_Force_thread_atom(SimGpu sim, AtomListGpu list)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x; 
@@ -143,7 +146,9 @@ void LJ_Force_thread_atom(SimGpu sim, AtomListGpu list)
 }
 
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, THREAD_ATOM_ACTIVE_CTAS)
+#endif
 void LJ_Force_thread_atom_interpolation(SimGpu sim, AtomListGpu list)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x; 
@@ -184,7 +189,7 @@ void LJ_Force_thread_atom_interpolation(SimGpu sim, AtomListGpu list)
     {  
       int jOff = jBox * MAXATOMS + jAtom; 
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
       real_t dx = irx - __ldg(&rx[jOff]);
       real_t dy = iry - __ldg(&ry[jOff]);
       real_t dz = irz - __ldg(&rz[jOff]);

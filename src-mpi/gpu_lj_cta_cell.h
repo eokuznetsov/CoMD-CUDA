@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -27,7 +28,9 @@
  ************************************************************************/
 
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(CTA_CELL_CTA, CTA_CELL_ACTIVE_CTAS)
+#endif
 void LJ_Force_cta_cell(SimGpu sim, int * cells_list, real_t rCut2, real_t s6)
 {
   __shared__ real_t otherX[SHARED_SIZE_CTA_CELL];
@@ -123,7 +126,9 @@ void LJ_Force_cta_cell(SimGpu sim, int * cells_list, real_t rCut2, real_t s6)
 
 template<bool genPairlist, int atomsPerInt>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(CTA_CELL_CTA, CTA_CELL_ACTIVE_CTAS)
+#endif
 void LJ_Force_cta_cell_pairlist(SimGpu sim, int * cells_list, real_t rCut2, real_t s6, real_t plcutoff)
 {
     __shared__ volatile real_t otherX[CTA_CELL_CTA];
@@ -139,7 +144,7 @@ void LJ_Force_cta_cell_pairlist(SimGpu sim, int * cells_list, real_t rCut2, real
     const real_t rCut6 = s6 / (rCut2*rCut2*rCut2);
     const real_t eShift = rCut6 * (rCut6 - 1.0f);
 
-    const int laneid = get_lane_id();
+    const int laneid = threadIdx.x & (WARP_SIZE - 1);
     const int warp_start = threadIdx.x & 96;
 
     for(int iAtom = threadIdx.x; iAtom < MAXATOMS; iAtom += blockDim.x)
@@ -150,7 +155,7 @@ void LJ_Force_cta_cell_pairlist(SimGpu sim, int * cells_list, real_t rCut2, real
         real_t ifz = 0.f;
         real_t ie = 0.f;
 
-        const int  warpid = blockIdx.x * MAXATOMS/WARP_SIZE + (iAtom >> 5);
+        const int  warpid = blockIdx.x * MAXATOMS/WARP_SIZE + (iAtom / WARP_SIZE);
 
         // fetch position
         const int iOff = iBox * MAXATOMS + iAtom;
@@ -194,7 +199,7 @@ void LJ_Force_cta_cell_pairlist(SimGpu sim, int * cells_list, real_t rCut2, real
                     {
                         if(base != 0)
                         {
-                            if(threadIdx.x % 32 == 0)
+                            if(threadIdx.x % WARP_SIZE == 0)
                                 sim.pairlist[N_MAX_NEIGHBORS * ((MAXATOMS+atomsPerInt-1)/atomsPerInt) * warpid + j * ((MAXATOMS+atomsPerInt-1)/atomsPerInt)+(base-PAIRLIST_STEP)/atomsPerInt] = flag;
                         }
                         flag = 0;
@@ -258,7 +263,7 @@ void LJ_Force_cta_cell_pairlist(SimGpu sim, int * cells_list, real_t rCut2, real
             }
             if(genPairlist)
             {
-                if(threadIdx.x % 32 == 0)
+                if(threadIdx.x % WARP_SIZE == 0)
                     sim.pairlist[N_MAX_NEIGHBORS * ((MAXATOMS+atomsPerInt-1)/atomsPerInt) * warpid + j * ((MAXATOMS+atomsPerInt-1)/atomsPerInt)+(MAXATOMS-PAIRLIST_STEP)/atomsPerInt] = flag;
             }
 

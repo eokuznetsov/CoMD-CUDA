@@ -151,7 +151,7 @@ void printPerformanceResults(int nGlobalAtoms, int printRate)
                  totalTime,
                  totalTime/loopTime*100.0);
 #else
-         fprintf(screenOut, "%-16s%12"PRIu64"     %8.4f      %8.4f    %8.2f\n", 
+         fprintf(screenOut, "%-16s%12" PRIu64 "     %8.4f      %8.4f    %8.2f\n",
                  timerName[ii],
                  perfTimer[ii].count,
                  totalTime/(double)perfTimer[ii].count,
@@ -191,6 +191,12 @@ void printPerformanceResults(int nGlobalAtoms, int printRate)
    fprintf(screenOut, "\n---------------------------------------------------\n");
    fprintf(screenOut, " Average atom rate:            %6.2f atoms/us\n", perfGlobal.atomsPerUSec);
    fprintf(screenOut, "---------------------------------------------------\n\n");
+
+#ifdef TEST_PLOT
+   FILE* pFile2 = fopen("results_plot.txt", "a");
+   fprintf(pFile2, "%f\n", perfGlobal.atomAllRate);
+   fclose(pFile2);
+#endif
 }
 
 void printPerformanceResultsYaml(FILE* file)
@@ -214,7 +220,7 @@ void printPerformanceResultsYaml(FILE* file)
 #if defined(_WIN32) || defined(_WIN64) 
 		 fprintf(file, "    CallCount: %llu\n", perfTimer[ii].count); 
 #else
-         fprintf(file, "    CallCount: %"PRIu64"\n", perfTimer[ii].count); 
+         fprintf(file, "    CallCount: %" PRIu64 "\n", perfTimer[ii].count);
 #endif
          fprintf(file, "    AvgPerCall: %8.4f\n", totalTime/(double)perfTimer[ii].count);
          fprintf(file, "    Total:      %8.4f\n", totalTime);

@@ -101,13 +101,13 @@ int main(int argc, char** argv)
 #ifdef DO_MPI
    // get number of gpus on current node
    int numGpus;
-   cudaGetDeviceCount(&numGpus);
+   hipGetDeviceCount(&numGpus);
 
    // set active device (assuming homogenous config)
    int deviceId = getMyRank() % numGpus;
    SetupGpu(deviceId);
 #else
-   SetupGpu(0);
+   SetupGpu(cmd.singleGpuInstanceId);
 #endif
 
    SimFlat* sim = initSimulation(cmd);
@@ -151,6 +151,12 @@ int main(int argc, char** argv)
    validateResult(validate, sim);
    profileStop(totalTimer);
 
+#ifdef TEST_PLOT
+   FILE* pFile2 = fopen("results_plot.txt", "a");
+   fprintf(pFile2, "%i, ", cmd.nx);
+   fclose(pFile2);
+#endif
+
    printPerformanceResults(sim->atoms->nGlobal, sim->printRate);
    printPerformanceResultsYaml(yamlFile);
 
@@ -162,7 +168,7 @@ int main(int argc, char** argv)
    destroyParallel();
 
    // for profiler
-   cudaDeviceReset();
+   hipDeviceReset();
 
    return 0;
 }
@@ -420,7 +426,7 @@ void validateResult(const Validate* val, SimFlat* sim)
 void sumAtoms(SimFlat* s)
 {
    // update num atoms from GPU
-//   cudaMemcpy(s->boxes->nAtoms, s->gpu.num_atoms, s->boxes->nLocalBoxes * sizeof(int), cudaMemcpyDeviceToHost);
+//   hipMemcpy(s->boxes->nAtoms, s->gpu.num_atoms, s->boxes->nLocalBoxes * sizeof(int), hipMemcpyDeviceToHost);
 
    // sum atoms across all processers
    s->atoms->nLocal = 0;

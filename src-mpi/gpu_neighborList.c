@@ -39,7 +39,7 @@
 #include "gpu_types.h"
 
 #include <assert.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
 #include "gpu_kernels.h"
 
 /// Initialize Neighborlist. Allocates all required data structures and initializes all
@@ -59,12 +59,12 @@ void initNeighborListGpu(SimGpu * sim, NeighborListGpu* neighborList, const int 
    neighborList->updateLinkCellsRequired = 0;
    neighborList->forceRebuildFlag = 1; 
 
-   cudaMalloc((void**)&(neighborList->list), neighborList->nMaxLocal * neighborList->nMaxNeighbors * sizeof(int));
-   cudaMalloc((void**)&(neighborList->nNeighbors), neighborList->nMaxLocal * sizeof(int));
+   hipMalloc((void**)&(neighborList->list), neighborList->nMaxLocal * neighborList->nMaxNeighbors * sizeof(int));
+   hipMalloc((void**)&(neighborList->nNeighbors), neighborList->nMaxLocal * sizeof(int));
 
-   cudaMalloc((void**)&(neighborList->lastR.x), neighborList->nMaxLocal * sizeof(real_t));
-   cudaMalloc((void**)&(neighborList->lastR.y), neighborList->nMaxLocal * sizeof(real_t));
-   cudaMalloc((void**)&(neighborList->lastR.z), neighborList->nMaxLocal * sizeof(real_t));  
+   hipMalloc((void**)&(neighborList->lastR.x), neighborList->nMaxLocal * sizeof(real_t));
+   hipMalloc((void**)&(neighborList->lastR.y), neighborList->nMaxLocal * sizeof(real_t));
+   hipMalloc((void**)&(neighborList->lastR.z), neighborList->nMaxLocal * sizeof(real_t));  
 
    emptyNeighborListGpu(sim, BOTH);
 
@@ -78,9 +78,9 @@ void destroyNeighborListGpu(NeighborListGpu** neighborList)
 
    comdFree((*neighborList)->list);
    comdFree((*neighborList)->nNeighbors);
-   cudaFree((*neighborList)->lastR.x);
-   cudaFree((*neighborList)->lastR.y);
-   cudaFree((*neighborList)->lastR.z);
+   hipFree((*neighborList)->lastR.x);
+   hipFree((*neighborList)->lastR.y);
+   hipFree((*neighborList)->lastR.z);
    comdFree((*neighborList));
    *neighborList = NULL;
 

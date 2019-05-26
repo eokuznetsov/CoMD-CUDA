@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -31,7 +32,9 @@
 // templated for the 1st and 3rd EAM passes
 template<int step, bool spline>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, THREAD_ATOM_ACTIVE_CTAS)
+#endif
 void EAM_Force_thread_atom(SimGpu sim, AtomListGpu list)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x; 
@@ -143,7 +146,9 @@ void EAM_Force_thread_atom(SimGpu sim, AtomListGpu list)
 /// templated for the 1st and 3rd EAM passes using the neighborlist
 template<int step, bool spline>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, THREAD_ATOM_ACTIVE_CTAS)
+#endif
 void EAM_Force_thread_atom_NL(SimGpu sim, AtomListGpu list)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x; 
@@ -164,7 +169,7 @@ void EAM_Force_thread_atom_NL(SimGpu sim, AtomListGpu list)
   real_t ie = 0;
   real_t irho = 0;
 
-  assert(iOff < sim.boxes.nLocalBoxes * MAXATOMS && iOff >=0 );
+  gassert(iOff < sim.boxes.nLocalBoxes * MAXATOMS && iOff >=0 );
 
   if (step == 3) {
     ifx = sim.atoms.f.x[iOff];
@@ -183,7 +188,7 @@ void EAM_Force_thread_atom_NL(SimGpu sim, AtomListGpu list)
  
   int iLid = tid; 
   const int ldNeighborList = sim.atoms.neighborList.nMaxLocal; //leading dimension
-  assert(iLid < ldNeighborList);
+  gassert(iLid < ldNeighborList);
   int* neighborList = sim.atoms.neighborList.list; 
   int nNeighbors = sim.atoms.neighborList.nNeighbors[iLid];
 
@@ -191,11 +196,11 @@ void EAM_Force_thread_atom_NL(SimGpu sim, AtomListGpu list)
   for (int j = 0; j < nNeighbors; j++) 
   { 
       const int jLid = j * ldNeighborList + iLid;
-      assert(jLid < ldNeighborList * sim.atoms.neighborList.nMaxNeighbors  );
+      gassert(jLid < ldNeighborList * sim.atoms.neighborList.nMaxNeighbors  );
       const int jOff = neighborList[jLid];
-      assert(jOff < sim.boxes.nTotalBoxes * MAXATOMS  && jOff >=0 );
+      gassert(jOff < sim.boxes.nTotalBoxes * MAXATOMS  && jOff >=0 );
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
       real_t dx = irx - __ldg(&rx[jOff]);
       real_t dy = iry - __ldg(&ry[jOff]);
       real_t dz = irz - __ldg(&rz[jOff]);
@@ -274,9 +279,9 @@ void EAM_Force_thread_atom2(SimGpu sim, AtomListGpu list)
 
   // compute box ID and local atom ID
   int iAtom = list.atoms[tid];
-  assert(iAtom < MAXATOMS);
+  gassert(iAtom < MAXATOMS);
   int iBox = list.cells[tid];
-  assert(iBox < sim.boxes.nLocalBoxes);
+  gassert(iBox < sim.boxes.nLocalBoxes);
 
   int iOff = iBox * MAXATOMS + iAtom;
 

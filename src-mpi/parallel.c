@@ -110,7 +110,7 @@ int sendReceiveParallel(void* sendBuf, int sendLen, int dest,
 #endif
 }
 
-void addIntParallel(int* sendBuf, int* recvBuf, int count)
+extern "C" void addIntParallel(int* sendBuf, int* recvBuf, int count)
 {
 #ifdef DO_MPI
    MPI_Allreduce(sendBuf, recvBuf, count, MPI_INT, MPI_SUM, MPI_COMM_WORLD);

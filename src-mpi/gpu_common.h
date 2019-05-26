@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -30,13 +31,22 @@
 #define __GPU_COMMON_H_
 
 #include "defines.h"
-#include <cuda.h>
+
+#if defined(__HCC__) || (defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350)
+#define HAS_LDG 1
+#else
+#define HAS_LDG 0
+#endif
 
 __device__ __forceinline__ float sqrt_approx(float f)
 {
+#if defined(__HCC__)
+    return sqrt(f);
+#else
     float ret;
     asm ("sqrt.approx.ftz.f32 %0, %1;" : "=f"(ret) : "f"(f));
     return ret;
+#endif
 }
 
 /// Interpolate a table to determine f(r) and its derivative f'(r).
@@ -51,8 +61,8 @@ void interpolate(InterpolationObjectGpu table, real_t r, real_t &f, real_t &df)
    const real_t* tt = table.values; // alias
 
    // check boundaries
-   r = max(r, table.x0);
-   r = min(r, table.xn);
+   r = fmax(r, table.x0);
+   r = fmin(r, table.xn);
     
    // compute index
    r = r * table.invDx - table.invDxXx0;
@@ -60,13 +70,13 @@ void interpolate(InterpolationObjectGpu table, real_t r, real_t &f, real_t &df)
    real_t ri = floor(r);
    
    int ii = (int)ri;
-   assert(ii < table.n );
+   gassert(ii < table.n );
 
    // reset r to fractional distance
    r = r - ri;
    
     // using LDG on Kepler only
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350  
+#if HAS_LDG 
     real_t v0 = __ldg(tt + ii);
     real_t v1 = __ldg(tt + ii + 1);
     real_t v2 = __ldg(tt + ii + 2);
@@ -100,8 +110,8 @@ void interpolateSpline(InterpolationSplineObjectGpu table, real_t r2, real_t &f,
    float r = sqrt_approx(r2);
 
    // check boundaries
-   r = max(r, table.x0);
-   r = min(r, table.xn);
+   r = fmax(r, table.x0);
+   r = fmin(r, table.xn);
     
    // compute index
    r = r * table.invDx - table.invDxXx0;
@@ -111,7 +121,7 @@ void interpolateSpline(InterpolationSplineObjectGpu table, real_t r2, real_t &f,
    int ii = 4*(int)ri;
 
     // using LDG on Kepler only
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350  
+#if HAS_LDG 
     real_t a = __ldg(tt + ii);
     real_t b = __ldg(tt + ii + 1);
     real_t c = __ldg(tt + ii + 2);
@@ -128,8 +138,7 @@ void interpolateSpline(InterpolationSplineObjectGpu table, real_t r2, real_t &f,
      df =2*((3*tmp-b)*r2+c);
 }
 
-
-#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ < 300
+#if !__HIP_ARCH_HAS_WARP_SHUFFLE__
 // emulate shuffles through shared memory for old devices (SLOW)
 __device__ __forceinline__
 double __shfl_xor(double var, int laneMask, double *smem)
@@ -194,7 +203,7 @@ int __shfl_down(real_t var, unsigned int delta, int width, real_t *smem)
 
 #else	// >= SM 3.0
 
-#if (CUDA_VERSION < 6050)
+#if defined(CUDA_VERSION)&&(CUDA_VERSION < 6050)
 __device__ __forceinline__
 double __shfl_xor(double var, int laneMask)
 {
@@ -214,10 +223,8 @@ double __shfl(double var, int laneMask)
 __device__ __forceinline__
 double __shfl_down(double var, unsigned int delta, int width = 32)
 {
-    int lo, hi;
-    asm volatile("mov.b64 {%0,%1}, %2;":"=r"(lo), "=r"(hi):"d"(var));
-    lo = __shfl_down(lo, delta, width);
-    hi = __shfl_down(hi, delta, width);
+    int lo = __shfl_down(__double2loint(var), delta, width);
+    int hi = __shfl_down(__double2hiint(var), delta, width);
     return __hiloint2double(hi, lo);
 }
 #endif
@@ -226,14 +233,6 @@ double __shfl_down(double var, unsigned int delta, int width = 32)
 #ifndef uint
 typedef unsigned int uint;
 #endif
-
-// insert the first numBits of y into x starting at bit
-__device__ uint bfi(uint x, uint y, uint bit, uint numBits) {
-  uint ret;
-  asm("bfi.b32 %0, %1, %2, %3, %4;" :
-      "=r"(ret) : "r"(y), "r"(x), "r"(bit), "r"(numBits));
-  return ret;
-}
 
 __device__ __forceinline__
 void warp_reduce(real_t &x, real_t *smem)
@@ -253,7 +252,7 @@ template<int step>
 __device__ __forceinline__
 void warp_reduce(real_t &ifx, real_t &ify, real_t &ifz, real_t &ie, real_t &irho)
 {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 300
+#if __HIP_ARCH_HAS_WARP_SHUFFLE__
   // warp reduction
   for (int i = WARP_SIZE / 2; i > 0; i /= 2) {
     ifx += __shfl_xor(ifx, i);
@@ -292,22 +291,11 @@ __device__ inline void atomicAdd(double *address, double value)
 }
 #endif
 
-static __device__ __forceinline__ int get_warp_id()
-{
-  return threadIdx.x >> 5;
-}
-
-static __device__ __forceinline__ int get_lane_id()
-{
-  int id;
-  asm( "mov.u32 %0, %%laneid;" : "=r"(id) );
-  return id;
-}
-
 // optimized version of DP rsqrt(a) provided by Norbert Juffa
 __device__
 double fast_rsqrt(double a)
 {
+#ifdef __CUDA_ARCH__
   double x, e, t;
   float f;
   asm ("cvt.rn.f32.f64       %0, %1;" : "=f"(f) : "d"(a));
@@ -319,6 +307,9 @@ double fast_rsqrt(double a)
   e = __dmul_rn (e, x);
   x = __fma_rn (t, e, x);
   return x;
+#else
+  return rsqrt(a);
+#endif
 }
 
 __device__

@@ -585,14 +585,14 @@ void updateGpuBoundaryCells(SimFlat *sim)
                       sim->host.atoms.p.z[iOff] = sim->atoms->p.z[iOff];
 
               }
-              cudaMemcpy((sim->gpu.atoms.r.x)+(iBox*MAXATOMS), (sim->host.atoms.r.x)+(iBox*MAXATOMS), f_size, cudaMemcpyHostToDevice);
-              cudaMemcpy((sim->gpu.atoms.r.y)+(iBox*MAXATOMS), (sim->host.atoms.r.y)+(iBox*MAXATOMS), f_size, cudaMemcpyHostToDevice);
-              cudaMemcpy((sim->gpu.atoms.r.z)+(iBox*MAXATOMS), (sim->host.atoms.r.z)+(iBox*MAXATOMS), f_size, cudaMemcpyHostToDevice);
-              cudaMemcpy((sim->gpu.atoms.p.x)+(iBox*MAXATOMS), (sim->host.atoms.p.x)+(iBox*MAXATOMS), f_size, cudaMemcpyHostToDevice);
-              cudaMemcpy((sim->gpu.atoms.p.y)+(iBox*MAXATOMS), (sim->host.atoms.p.y)+(iBox*MAXATOMS), f_size, cudaMemcpyHostToDevice);
-              cudaMemcpy((sim->gpu.atoms.p.z)+(iBox*MAXATOMS), (sim->host.atoms.p.z)+(iBox*MAXATOMS), f_size, cudaMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.r.x)+(iBox*MAXATOMS), (sim->host.atoms.r.x)+(iBox*MAXATOMS), f_size, hipMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.r.y)+(iBox*MAXATOMS), (sim->host.atoms.r.y)+(iBox*MAXATOMS), f_size, hipMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.r.z)+(iBox*MAXATOMS), (sim->host.atoms.r.z)+(iBox*MAXATOMS), f_size, hipMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.p.x)+(iBox*MAXATOMS), (sim->host.atoms.p.x)+(iBox*MAXATOMS), f_size, hipMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.p.y)+(iBox*MAXATOMS), (sim->host.atoms.p.y)+(iBox*MAXATOMS), f_size, hipMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.p.z)+(iBox*MAXATOMS), (sim->host.atoms.p.z)+(iBox*MAXATOMS), f_size, hipMemcpyHostToDevice);
 
-              cudaMemcpy((sim->gpu.atoms.gid)+(iBox*MAXATOMS), (sim->atoms->gid)+(iBox*MAXATOMS), i_size, cudaMemcpyHostToDevice);
-              cudaMemcpy((sim->gpu.atoms.iSpecies)+(iBox*MAXATOMS), (sim->atoms->iSpecies)+(iBox*MAXATOMS), i_size, cudaMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.gid)+(iBox*MAXATOMS), (sim->atoms->gid)+(iBox*MAXATOMS), i_size, hipMemcpyHostToDevice);
+              hipMemcpy((sim->gpu.atoms.iSpecies)+(iBox*MAXATOMS), (sim->atoms->iSpecies)+(iBox*MAXATOMS), i_size, hipMemcpyHostToDevice);
       }
 }

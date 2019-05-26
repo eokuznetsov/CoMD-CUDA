@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -26,7 +27,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  ************************************************************************/
 
-#include <cuda.h>
 #include <assert.h>
 
 #include "defines.h"
@@ -36,29 +36,37 @@
 #include "gpu_kernels.h"
 
 // fallback for 5.0
-#if (CUDA_VERSION < 5050)
-  cudaError_t cudaStreamCreateWithPriority(cudaStream_t *stream, unsigned int flags, int priority) {
+#if defined(CUDA_VERSION) && (CUDA_VERSION < 5050)
+  hipError_t hipStreamCreateWithPriority(hipStream_t *stream, unsigned int flags, int priority) {
     printf("WARNING: priority streams are not supported in CUDA 5.0, falling back to regular streams");
-    return cudaStreamCreate(stream);
+    return hipStreamCreate(stream);
   }
 #endif
 
 void cudaCopyDtH(void* dst, const void* src, int size)
 {
-   cudaMemcpy(dst, src, size, cudaMemcpyDeviceToHost);
+   hipMemcpy(dst, src, size, hipMemcpyDeviceToHost);
 }
 
 void SetupGpu(int deviceId)
 {
-  CUDA_CHECK(cudaSetDevice(deviceId));
+  CUDA_CHECK(hipSetDevice(deviceId));
   
-  struct cudaDeviceProp props;
-  CUDA_CHECK(cudaGetDeviceProperties(&props, deviceId));
+  struct hipDeviceProp_t props;
+  CUDA_CHECK(hipGetDeviceProperties(&props, deviceId));
 
   char hostname[256];
   gethostname(hostname, sizeof(hostname));
 
   printf("Host %s using GPU %i: %s\n\n", hostname, deviceId, props.name);
+
+#ifdef AMD_PLATFORM
+  printf("AMD platform\n");
+#endif
+#ifdef NVIDIA_PLATFORM
+    printf("NVIDIA platform\n");
+#endif
+    printf("WARP_SIZE: %i\n\n", WARP_SIZE);
 }
 
 // input is haloExchange structure for forces
@@ -129,23 +137,23 @@ void SetBoundaryCells(SimFlat *flat, HaloExchange *hh)
   }
 
   // allocate on GPU
-  CUDA_CHECK(cudaMalloc((void**)&flat->boundary1_cells_d, n_boundary1_cells * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&flat->boundary_cells, n_boundary_cells * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&flat->interior_cells, n_interior_cells * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&flat->boundary1_cells_d, n_boundary1_cells * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&flat->boundary_cells, n_boundary_cells * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&flat->interior_cells, n_interior_cells * sizeof(int)));
 
   // copy to GPU  
-  CUDA_CHECK(cudaMemcpy(flat->boundary1_cells_d, flat->boundary1_cells_h, n_boundary1_cells * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(flat->boundary_cells, h_boundary_cells, n_boundary_cells * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(flat->interior_cells, h_interior_cells, n_interior_cells * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(flat->boundary1_cells_d, flat->boundary1_cells_h, n_boundary1_cells * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(flat->boundary_cells, h_boundary_cells, n_boundary_cells * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(flat->interior_cells, h_interior_cells, n_interior_cells * sizeof(int), hipMemcpyHostToDevice));
 
   // set cell types
-  CUDA_CHECK(cudaMalloc((void**)&flat->gpu.cell_type, nLocalBoxes * sizeof(int)));
-  CUDA_CHECK(cudaMemcpy(flat->gpu.cell_type, h_cell_type, nLocalBoxes * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMalloc((void**)&flat->gpu.cell_type, nLocalBoxes * sizeof(int)));
+  CUDA_CHECK(hipMemcpy(flat->gpu.cell_type, h_cell_type, nLocalBoxes * sizeof(int), hipMemcpyHostToDevice));
 
   if (flat->gpuAsync) {
     // create priority & normal streams
-    CUDA_CHECK(cudaStreamCreateWithPriority(&flat->boundary_stream, 0, -1));	// set higher priority
-    CUDA_CHECK(cudaStreamCreate(&flat->interior_stream));
+    CUDA_CHECK(hipStreamCreateWithPriority(&flat->boundary_stream, 0, -1));	// set higher priority
+    CUDA_CHECK(hipStreamCreate(&flat->interior_stream));
   }
   else {
     // set streams to NULL
@@ -160,9 +168,9 @@ void SetBoundaryCells(SimFlat *flat, HaloExchange *hh)
 void AllocateGpu(SimFlat *sim, int do_eam, real_t skinDistance)
 {
   int deviceId;
-  struct cudaDeviceProp props;
-  CUDA_CHECK(cudaGetDevice(&deviceId));
-  CUDA_CHECK(cudaGetDeviceProperties(&props, deviceId));
+  struct hipDeviceProp_t props;
+  CUDA_CHECK(hipGetDevice(&deviceId));
+  CUDA_CHECK(hipGetDeviceProperties(&props, deviceId));
 
   SimGpu *gpu = &sim->gpu;
 
@@ -174,46 +182,46 @@ void AllocateGpu(SimFlat *sim, int do_eam, real_t skinDistance)
   int r_size = total_boxes * MAXATOMS * sizeof(real_t);
   int f_size = nLocalBoxes * MAXATOMS * sizeof(real_t);
 
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.r.x, r_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.r.y, r_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.r.z, r_size)); 
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.r.x, r_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.r.y, r_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.r.z, r_size)); 
 
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.p.x, r_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.p.y, r_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.p.z, r_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.p.x, r_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.p.y, r_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.p.z, r_size));
 
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.f.x, f_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.f.y, f_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.f.z, f_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.f.x, f_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.f.y, f_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.f.z, f_size));
 
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.e, f_size));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->d_updateLinkCellsRequired, sizeof(int)));
-  CUDA_CHECK(cudaMemset(gpu->d_updateLinkCellsRequired, 0, sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.e, f_size));
+  CUDA_CHECK(hipMalloc((void**)&gpu->d_updateLinkCellsRequired, sizeof(int)));
+  CUDA_CHECK(hipMemset(gpu->d_updateLinkCellsRequired, 0, sizeof(int)));
 
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.gid, total_boxes * MAXATOMS * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.gid, total_boxes * MAXATOMS * sizeof(int)));
 
   // species data
-  CUDA_CHECK(cudaMalloc((void**)&gpu->atoms.iSpecies, total_boxes * MAXATOMS * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->species_mass, num_species * sizeof(real_t)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->atoms.iSpecies, total_boxes * MAXATOMS * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->species_mass, num_species * sizeof(real_t)));
 
   // allocate indices, neighbors, etc.
-  CUDA_CHECK(cudaMalloc((void**)&gpu->neighbor_cells, nLocalBoxes * N_MAX_NEIGHBORS * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->neighbor_atoms, nLocalBoxes * N_MAX_NEIGHBORS * MAXATOMS * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->num_neigh_atoms, nLocalBoxes * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->neighbor_cells, nLocalBoxes * N_MAX_NEIGHBORS * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->neighbor_atoms, nLocalBoxes * N_MAX_NEIGHBORS * MAXATOMS * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->num_neigh_atoms, nLocalBoxes * sizeof(int)));
 
   // total # of atoms in local boxes
   int n = 0;
   for (int iBox=0; iBox < sim->boxes->nLocalBoxes; iBox++)
     n += sim->boxes->nAtoms[iBox];
   gpu->a_list.n = n;
-  CUDA_CHECK(cudaMalloc((void**)&gpu->a_list.atoms, n * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->a_list.cells, n * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->a_list.atoms, n * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->a_list.cells, n * sizeof(int)));
 
   // allocate other lists as well
-  CUDA_CHECK(cudaMalloc((void**)&gpu->i_list.atoms, n * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->i_list.cells, n * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->b_list.atoms, n * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&gpu->b_list.cells, n * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->i_list.atoms, n * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->i_list.cells, n * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->b_list.atoms, n * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&gpu->b_list.cells, n * sizeof(int)));
 
   initNeighborListGpu(gpu, &(gpu->atoms.neighborList),nLocalBoxes, skinDistance);
   initLinkCellsGpu(sim, &(gpu->boxes));
@@ -224,33 +232,42 @@ void AllocateGpu(SimFlat *sim, int do_eam, real_t skinDistance)
   //Allocate pairlist
   if(sim->usePairlist)
   { 
-      cudaMalloc((void**)&gpu->pairlist,nLocalBoxes * MAXATOMS/WARP_SIZE*N_MAX_NEIGHBORS * (MAXATOMS + PAIRLIST_ATOMS_PER_INT-1)/PAIRLIST_ATOMS_PER_INT * sizeof(int));
+      hipMalloc((void**)&gpu->pairlist,nLocalBoxes * MAXATOMS/WARP_SIZE*N_MAX_NEIGHBORS * (MAXATOMS + PAIRLIST_ATOMS_PER_INT-1)/PAIRLIST_ATOMS_PER_INT * sizeof(int));
   }
   // init EAM arrays
   if (do_eam)  
   {
     EamPotential* pot = (EamPotential*) sim->pot;
     
-    cudaMalloc((void**)&gpu->eam_pot.f.values, (pot->f->n+3) * sizeof(real_t));
+    hipMalloc((void**)&gpu->eam_pot.f.values, (pot->f->n+3) * sizeof(real_t));
     if(!sim->spline)
     {
-        cudaMalloc((void**)&gpu->eam_pot.rho.values, (pot->rho->n+3) * sizeof(real_t));
-        cudaMalloc((void**)&gpu->eam_pot.phi.values, (pot->phi->n+3) * sizeof(real_t));
+        hipMalloc((void**)&gpu->eam_pot.rho.values, (pot->rho->n+3) * sizeof(real_t));
+        hipMalloc((void**)&gpu->eam_pot.phi.values, (pot->phi->n+3) * sizeof(real_t));
     }
     else
     {
-        cudaMalloc((void**)&gpu->eam_pot.fS.coefficients, (4*pot->f->n) * sizeof(real_t));
-        cudaMalloc((void**)&gpu->eam_pot.rhoS.coefficients, (4*pot->rho->n) * sizeof(real_t));
-        cudaMalloc((void**)&gpu->eam_pot.phiS.coefficients, (4*pot->phi->n) * sizeof(real_t));
+        hipMalloc((void**)&gpu->eam_pot.fS.coefficients, (4*pot->f->n) * sizeof(real_t));
+        hipMalloc((void**)&gpu->eam_pot.rhoS.coefficients, (4*pot->rho->n) * sizeof(real_t));
+        hipMalloc((void**)&gpu->eam_pot.phiS.coefficients, (4*pot->phi->n) * sizeof(real_t));
     }
-    cudaMalloc((void**)&gpu->eam_pot.dfEmbed, r_size);
-    cudaMalloc((void**)&gpu->eam_pot.rhobar, r_size);
+    hipMalloc((void**)&gpu->eam_pot.dfEmbed, r_size);
+    hipMalloc((void**)&gpu->eam_pot.rhobar, r_size);
+    gpu->lj_pot.lj_interpolation.values = NULL;
   }
   else //init LJ iterpolation table
   {
     LjPotential * pot = (LjPotential*) sim->pot;
 //TODO: configurable length
-   CUDA_CHECK(cudaMalloc((void**)&(gpu->lj_pot.lj_interpolation.values), 1003 * sizeof(real_t)));
+   CUDA_CHECK(hipMalloc((void**)&(gpu->lj_pot.lj_interpolation.values), 1003 * sizeof(real_t)));
+      gpu->eam_pot.f.values = NULL;
+      gpu->eam_pot.rho.values = NULL;
+      gpu->eam_pot.phi.values = NULL;
+      gpu->eam_pot.fS.coefficients = NULL;
+      gpu->eam_pot.rhoS.coefficients = NULL;
+      gpu->eam_pot.phiS.coefficients = NULL;
+      gpu->eam_pot.dfEmbed = NULL;
+      gpu->eam_pot.rhobar = NULL;
   }
 
   // initialize host data as well
@@ -270,10 +287,10 @@ void AllocateGpu(SimFlat *sim, int do_eam, real_t skinDistance)
   host->a_list.cells = (int*)malloc(n * sizeof(int));
 
   // temp arrays
-  CUDA_CHECK(cudaMalloc((void**)&sim->flags, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&sim->tmp_sort, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&sim->gpu_atoms_buf, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(AtomMsg)));
-  CUDA_CHECK(cudaMalloc((void**)&sim->gpu_force_buf, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(ForceMsg)));
+  CUDA_CHECK(hipMalloc((void**)&sim->flags, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&sim->tmp_sort, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&sim->gpu_atoms_buf, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(AtomMsg)));
+  CUDA_CHECK(hipMalloc((void**)&sim->gpu_force_buf, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(ForceMsg)));
 }
 
 void DestroyGpu(SimFlat *flat)
@@ -281,55 +298,55 @@ void DestroyGpu(SimFlat *flat)
   SimGpu *gpu = &flat->gpu;
   SimGpu *host = &flat->host;
 
-  CUDA_CHECK(cudaFree(gpu->d_updateLinkCellsRequired));
-  CUDA_CHECK(cudaFree(gpu->atoms.r.x));
-  CUDA_CHECK(cudaFree(gpu->atoms.r.y));
-  CUDA_CHECK(cudaFree(gpu->atoms.r.z));
+  CUDA_CHECK(hipFree(gpu->d_updateLinkCellsRequired));
+  CUDA_CHECK(hipFree(gpu->atoms.r.x));
+  CUDA_CHECK(hipFree(gpu->atoms.r.y));
+  CUDA_CHECK(hipFree(gpu->atoms.r.z));
 
-  CUDA_CHECK(cudaFree(gpu->atoms.p.x));
-  CUDA_CHECK(cudaFree(gpu->atoms.p.y));
-  CUDA_CHECK(cudaFree(gpu->atoms.p.z));
+  CUDA_CHECK(hipFree(gpu->atoms.p.x));
+  CUDA_CHECK(hipFree(gpu->atoms.p.y));
+  CUDA_CHECK(hipFree(gpu->atoms.p.z));
 
-  CUDA_CHECK(cudaFree(gpu->atoms.f.x));
-  CUDA_CHECK(cudaFree(gpu->atoms.f.y));
-  CUDA_CHECK(cudaFree(gpu->atoms.f.z));
+  CUDA_CHECK(hipFree(gpu->atoms.f.x));
+  CUDA_CHECK(hipFree(gpu->atoms.f.y));
+  CUDA_CHECK(hipFree(gpu->atoms.f.z));
 
-  CUDA_CHECK(cudaFree(gpu->atoms.e));
+  CUDA_CHECK(hipFree(gpu->atoms.e));
 
-  CUDA_CHECK(cudaFree(gpu->atoms.gid));
+  CUDA_CHECK(hipFree(gpu->atoms.gid));
 
-  CUDA_CHECK(cudaFree(gpu->atoms.iSpecies));
-  CUDA_CHECK(cudaFree(gpu->species_mass));
+  CUDA_CHECK(hipFree(gpu->atoms.iSpecies));
+  CUDA_CHECK(hipFree(gpu->species_mass));
 
-  CUDA_CHECK(cudaFree(gpu->neighbor_cells));
-  CUDA_CHECK(cudaFree(gpu->neighbor_atoms));
-  CUDA_CHECK(cudaFree(gpu->num_neigh_atoms));
-  CUDA_CHECK(cudaFree(gpu->boxes.nAtoms));
+  CUDA_CHECK(hipFree(gpu->neighbor_cells));
+  CUDA_CHECK(hipFree(gpu->neighbor_atoms));
+  CUDA_CHECK(hipFree(gpu->num_neigh_atoms));
+  CUDA_CHECK(hipFree(gpu->boxes.nAtoms));
 
-  CUDA_CHECK(cudaFree(gpu->a_list.atoms));
-  CUDA_CHECK(cudaFree(gpu->a_list.cells));
+  CUDA_CHECK(hipFree(gpu->a_list.atoms));
+  CUDA_CHECK(hipFree(gpu->a_list.cells));
 
-  CUDA_CHECK(cudaFree(gpu->i_list.atoms));
-  CUDA_CHECK(cudaFree(gpu->i_list.cells));
+  CUDA_CHECK(hipFree(gpu->i_list.atoms));
+  CUDA_CHECK(hipFree(gpu->i_list.cells));
 
-  CUDA_CHECK(cudaFree(gpu->b_list.atoms));
-  CUDA_CHECK(cudaFree(gpu->b_list.cells));
+  CUDA_CHECK(hipFree(gpu->b_list.atoms));
+  CUDA_CHECK(hipFree(gpu->b_list.cells));
 
-  CUDA_CHECK(cudaFree(flat->flags));
-  CUDA_CHECK(cudaFree(flat->tmp_sort));
-  CUDA_CHECK(cudaFree(flat->gpu_atoms_buf));
-  CUDA_CHECK(cudaFree(flat->gpu_force_buf));
+  CUDA_CHECK(hipFree(flat->flags));
+  CUDA_CHECK(hipFree(flat->tmp_sort));
+  CUDA_CHECK(hipFree(flat->gpu_atoms_buf));
+  CUDA_CHECK(hipFree(flat->gpu_force_buf));
 
-  if (gpu->eam_pot.f.values) CUDA_CHECK(cudaFree(gpu->eam_pot.f.values));
-  if (gpu->eam_pot.rho.values) CUDA_CHECK(cudaFree(gpu->eam_pot.rho.values));
-  if (gpu->eam_pot.phi.values) CUDA_CHECK(cudaFree(gpu->eam_pot.phi.values));
+  if (gpu->eam_pot.f.values) CUDA_CHECK(hipFree(gpu->eam_pot.f.values));
+  if (gpu->eam_pot.rho.values) CUDA_CHECK(hipFree(gpu->eam_pot.rho.values));
+  if (gpu->eam_pot.phi.values) CUDA_CHECK(hipFree(gpu->eam_pot.phi.values));
 
-  if (gpu->eam_pot.fS.coefficients) cudaFree(gpu->eam_pot.fS.coefficients);
-  if (gpu->eam_pot.rhoS.coefficients) cudaFree(gpu->eam_pot.rhoS.coefficients);
-  if (gpu->eam_pot.phiS.coefficients) cudaFree(gpu->eam_pot.phiS.coefficients);
+  if (gpu->eam_pot.fS.coefficients) hipFree(gpu->eam_pot.fS.coefficients);
+  if (gpu->eam_pot.rhoS.coefficients) hipFree(gpu->eam_pot.rhoS.coefficients);
+  if (gpu->eam_pot.phiS.coefficients) hipFree(gpu->eam_pot.phiS.coefficients);
 
-  if (gpu->eam_pot.dfEmbed) cudaFree(gpu->eam_pot.dfEmbed);
-  if (gpu->eam_pot.rhobar) cudaFree(gpu->eam_pot.rhobar);
+  if (gpu->eam_pot.dfEmbed) hipFree(gpu->eam_pot.dfEmbed);
+  if (gpu->eam_pot.rhobar) hipFree(gpu->eam_pot.rhobar);
 
   free(host->species_mass);
 
@@ -363,7 +380,7 @@ void initLJinterpolation(LjPotentialGpu * pot)
        real_t r6 = s6 * r2*r2*r2;
        temp[i] = 4 * epsilon * (r6 * (r6 - 1.0) - eShift);
   }
-  CUDA_CHECK(cudaMemcpy(pot->lj_interpolation.values, temp, (pot->lj_interpolation.n+3)*sizeof(real_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(pot->lj_interpolation.values, temp, (pot->lj_interpolation.n+3)*sizeof(real_t), hipMemcpyHostToDevice));
 
   free(temp);
 }
@@ -417,7 +434,7 @@ void initSplineCoefficients(real_t * gpu_coefficients, int n, real_t * values, r
         coefficients[i*4+2] = 1.0/(x2-x1) * (1.0/6.0*(-3*x2*x2+(x2-x1)*(x2-x1))*d2y1+1.0/6.0*(3*x1*x1-(x2-x1)*(x2-x1))*d2y2-y1+y2);
         coefficients[i*4+3] = 1/(x2-x1)*(x2*y1-x1*y2+1.0/6.0*d2y1*(x2*x2*x2-x2*(x2-x1)*(x2-x1)) + 1.0/6.0*d2y2*(-x1*x1*x1+x1*(x2-x1)*(x2-x1)));
     }
-    cudaMemcpy(gpu_coefficients, coefficients, 4 * n * sizeof(real_t), cudaMemcpyHostToDevice);
+    hipMemcpy(gpu_coefficients, coefficients, 4 * n * sizeof(real_t), hipMemcpyHostToDevice);
 
     free(y2);
     free(u);
@@ -442,7 +459,7 @@ void CopyDataToGpu(SimFlat *sim, int do_eam)
       gpu->eam_pot.f.invDx = pot->f->invDx;
       gpu->eam_pot.f.invDxHalf = pot->f->invDx * 0.5;
       gpu->eam_pot.f.invDxXx0 = pot->f->invDxXx0;
-      cudaMemcpy(gpu->eam_pot.f.values, pot->f->values-1, (pot->f->n+3) * sizeof(real_t), cudaMemcpyHostToDevice);
+      hipMemcpy(gpu->eam_pot.f.values, pot->f->values-1, (pot->f->n+3) * sizeof(real_t), hipMemcpyHostToDevice);
 
       if(!sim->spline)
       {
@@ -464,9 +481,9 @@ void CopyDataToGpu(SimFlat *sim, int do_eam)
         gpu->eam_pot.rho.invDxXx0 = pot->rho->invDxXx0;
         gpu->eam_pot.phi.invDxXx0 = pot->phi->invDxXx0;
 
-    CUDA_CHECK(cudaMemcpy(gpu->eam_pot.f.values, pot->f->values-1, (pot->f->n+3) * sizeof(real_t), cudaMemcpyHostToDevice));
-        cudaMemcpy(gpu->eam_pot.rho.values, pot->rho->values-1, (pot->rho->n+3) * sizeof(real_t), cudaMemcpyHostToDevice);
-        cudaMemcpy(gpu->eam_pot.phi.values, pot->phi->values-1, (pot->phi->n+3) * sizeof(real_t), cudaMemcpyHostToDevice);
+    CUDA_CHECK(hipMemcpy(gpu->eam_pot.f.values, pot->f->values-1, (pot->f->n+3) * sizeof(real_t), hipMemcpyHostToDevice));
+        hipMemcpy(gpu->eam_pot.rho.values, pot->rho->values-1, (pot->rho->n+3) * sizeof(real_t), hipMemcpyHostToDevice);
+        hipMemcpy(gpu->eam_pot.phi.values, pot->phi->values-1, (pot->phi->n+3) * sizeof(real_t), hipMemcpyHostToDevice);
     }
     else
     {
@@ -568,45 +585,45 @@ void CopyDataToGpu(SimFlat *sim, int do_eam)
     host->species_mass[i] = sim->species[i].mass;
 
   // copy all data to gpus
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.r.x, sim->atoms->r.x, r_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.r.y, sim->atoms->r.y, r_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.r.z, sim->atoms->r.z, r_size, cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.r.x, sim->atoms->r.x, r_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.r.y, sim->atoms->r.y, r_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.r.z, sim->atoms->r.z, r_size, hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.p.x, sim->atoms->p.x, r_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.p.y, sim->atoms->p.y, r_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.p.z, sim->atoms->p.z, r_size, cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.p.x, sim->atoms->p.x, r_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.p.y, sim->atoms->p.y, r_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.p.z, sim->atoms->p.z, r_size, hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.iSpecies, sim->atoms->iSpecies, nLocalBoxes * MAXATOMS * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.gid, sim->atoms->gid, total_boxes * MAXATOMS * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.iSpecies, sim->atoms->iSpecies, nLocalBoxes * MAXATOMS * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.gid, sim->atoms->gid, total_boxes * MAXATOMS * sizeof(int), hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->species_mass, host->species_mass, num_species * sizeof(real_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->species_mass, host->species_mass, num_species * sizeof(real_t), hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->neighbor_cells, host->neighbor_cells, nLocalBoxes * N_MAX_NEIGHBORS * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->neighbor_atoms, host->neighbor_atoms, nLocalBoxes * N_MAX_NEIGHBORS * MAXATOMS * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->num_neigh_atoms, host->num_neigh_atoms, nLocalBoxes * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->neighbor_cells, host->neighbor_cells, nLocalBoxes * N_MAX_NEIGHBORS * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->neighbor_atoms, host->neighbor_atoms, nLocalBoxes * N_MAX_NEIGHBORS * MAXATOMS * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->num_neigh_atoms, host->num_neigh_atoms, nLocalBoxes * sizeof(int), hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->boxes.nAtoms, sim->boxes->nAtoms, total_boxes * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->boxes.boxIDLookUp, sim->boxes->boxIDLookUp, nLocalBoxes * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->boxes.boxIDLookUpReverse, sim->boxes->boxIDLookUpReverse, nLocalBoxes * sizeof(int3_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->boxes.nAtoms, sim->boxes->nAtoms, total_boxes * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->boxes.boxIDLookUp, sim->boxes->boxIDLookUp, nLocalBoxes * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->boxes.boxIDLookUpReverse, sim->boxes->boxIDLookUpReverse, nLocalBoxes * sizeof(int3_t), hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->a_list.atoms, host->a_list.atoms, n_total * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->a_list.cells, host->a_list.cells, n_total * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->a_list.atoms, host->a_list.atoms, n_total * sizeof(int), hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->a_list.cells, host->a_list.cells, n_total * sizeof(int), hipMemcpyHostToDevice));
 
 }
 
 void updateNAtomsGpu(SimFlat* sim)
 {
-  CUDA_CHECK(cudaMemcpy(sim->gpu.boxes.nAtoms,sim->boxes->nAtoms,  sim->boxes->nTotalBoxes * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(sim->gpu.boxes.nAtoms,sim->boxes->nAtoms,  sim->boxes->nTotalBoxes * sizeof(int), hipMemcpyHostToDevice));
 }
 
 void updateNAtomsCpu(SimFlat* sim)
 {
-  CUDA_CHECK(cudaMemcpy(sim->boxes->nAtoms, sim->gpu.boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->boxes->nAtoms, sim->gpu.boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int), hipMemcpyDeviceToHost));
 }
 
 void emptyHaloCellsGpu(SimFlat* sim)
 {
-  CUDA_CHECK(cudaMemset(sim->gpu.boxes.nAtoms + sim->boxes->nLocalBoxes, 0, (sim->boxes->nTotalBoxes - sim->boxes->nLocalBoxes) * sizeof(int)));
+  CUDA_CHECK(hipMemset(sim->gpu.boxes.nAtoms + sim->boxes->nLocalBoxes, 0, (sim->boxes->nTotalBoxes - sim->boxes->nLocalBoxes) * sizeof(int)));
 }
 
 void GetDataFromGpu(SimFlat *sim)
@@ -618,21 +635,21 @@ void GetDataFromGpu(SimFlat *sim)
   int f_size = sim->boxes->nLocalBoxes * MAXATOMS * sizeof(real_t);
 
   // update num atoms
-  CUDA_CHECK(cudaMemcpy(sim->boxes->nAtoms, gpu->boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->boxes->nAtoms, gpu->boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int), hipMemcpyDeviceToHost));
 
-  CUDA_CHECK(cudaMemcpy(sim->atoms->p.x, gpu->atoms.p.x, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->p.y, gpu->atoms.p.y, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->p.z, gpu->atoms.p.z, f_size, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->p.x, gpu->atoms.p.x, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->p.y, gpu->atoms.p.y, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->p.z, gpu->atoms.p.z, f_size, hipMemcpyDeviceToHost));
 
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.x, gpu->atoms.r.x, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.y, gpu->atoms.r.y, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.z, gpu->atoms.r.z, f_size, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.x, gpu->atoms.r.x, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.y, gpu->atoms.r.y, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.z, gpu->atoms.r.z, f_size, hipMemcpyDeviceToHost));
 
-  CUDA_CHECK(cudaMemcpy(sim->atoms->f.x, gpu->atoms.f.x, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->f.y, gpu->atoms.f.y, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->f.z, gpu->atoms.f.z, f_size, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->f.x, gpu->atoms.f.x, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->f.y, gpu->atoms.f.y, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->f.z, gpu->atoms.f.z, f_size, hipMemcpyDeviceToHost));
 
-  CUDA_CHECK(cudaMemcpy(sim->atoms->U, gpu->atoms.e, f_size, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->U, gpu->atoms.e, f_size, hipMemcpyDeviceToHost));
  
   // assign energy and forces
   // compute total energy
@@ -656,14 +673,14 @@ void GetLocalAtomsFromGpu(SimFlat *sim)
   // copy back forces & energies
   int f_size = sim->boxes->nLocalBoxes * MAXATOMS * sizeof(real_t);
 
-  CUDA_CHECK(cudaMemcpy(sim->atoms->p.x, gpu->atoms.p.x, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->p.y, gpu->atoms.p.y, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->p.z, gpu->atoms.p.z, f_size, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->p.x, gpu->atoms.p.x, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->p.y, gpu->atoms.p.y, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->p.z, gpu->atoms.p.z, f_size, hipMemcpyDeviceToHost));
 
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.x, gpu->atoms.r.x, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.y, gpu->atoms.r.y, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.z, gpu->atoms.r.z, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->gid, gpu->atoms.gid, sim->boxes->nLocalBoxes* MAXATOMS * sizeof(int), cudaMemcpyDeviceToHost)); //only req. if nlforced TODO
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.x, gpu->atoms.r.x, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.y, gpu->atoms.r.y, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.z, gpu->atoms.r.z, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->gid, gpu->atoms.gid, sim->boxes->nLocalBoxes* MAXATOMS * sizeof(int), hipMemcpyDeviceToHost)); //only req. if nlforced TODO
 }
 
 /// Compacts all atoms within the halo cells into h_compactAtoms (stored in SoA data-layout).
@@ -720,7 +737,7 @@ void updateGpuHalo(SimFlat *sim)
 //    
 //  //copy compacted atoms to gpu
 //  char* d_compactAtoms = sim->gpu_atoms_buf;
-//  CUDA_CHECK(cudaMemcpy((void*)(d_compactAtoms), h_compactAtoms, nTotalAtomsInHaloCells * sizeof(AtomMsg), cudaMemcpyHostToDevice));
+//  CUDA_CHECK(hipMemcpy((void*)(d_compactAtoms), h_compactAtoms, nTotalAtomsInHaloCells * sizeof(AtomMsg), hipMemcpyHostToDevice));
 //
 //  //alias host and device buffers with AtomMsgSoA
 //  AtomMsgSoA msg_d;
@@ -728,25 +745,25 @@ void updateGpuHalo(SimFlat *sim)
 //
 //  //copy cellOffset to cpu
 //  int* d_cellOffset = ((AtomExchangeParms*)sim->atomExchange->parms)->d_natoms_buf;
-//  CUDA_CHECK(cudaMemcpy(d_cellOffsets, h_cellOffset, (nHaloCells+1) * sizeof(int), cudaMemcpyHostToDevice));
+//  CUDA_CHECK(hipMemcpy(d_cellOffsets, h_cellOffset, (nHaloCells+1) * sizeof(int), hipMemcpyHostToDevice));
 //
 //  const int blockDim = 256;
 //  int grid = nTotalAtomsInHaloCells + (blockDim - 1) / blockDim;
-//  unpackHaloCells<<<grid, block>>>(d_cellOffset, d_compactAtoms, sim->gpu); //TODO implement this function
+//  hipLaunchKernelGGL((unpackHaloCells), dim3(grid), dim3(block), 0, 0, d_cellOffset, d_compactAtoms, sim->gpu); //TODO implement this function
 
   int f_size = nHaloCells * MAXATOMS * sizeof(real_t);
   int i_size = nHaloCells * MAXATOMS * sizeof(int);
 
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.p.x+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->p.x+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.p.y+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->p.y+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.p.z+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->p.z+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.p.x+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->p.x+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.p.y+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->p.y+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.p.z+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->p.z+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.r.x+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->r.x+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.r.y+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->r.y+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.r.z+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->r.z+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, cudaMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.r.x+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->r.x+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.r.y+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->r.y+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, hipMemcpyHostToDevice));
+  CUDA_CHECK(hipMemcpy(gpu->atoms.r.z+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->r.z+(sim->boxes->nLocalBoxes * MAXATOMS), f_size, hipMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.gid+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->gid+(sim->boxes->nLocalBoxes * MAXATOMS), i_size, cudaMemcpyHostToDevice)); //TODO REmove?
-  CUDA_CHECK(cudaMemcpy(gpu->atoms.iSpecies+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->iSpecies+(sim->boxes->nLocalBoxes * MAXATOMS), i_size, cudaMemcpyHostToDevice)); //TODO remove?
+  CUDA_CHECK(hipMemcpy(gpu->atoms.gid+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->gid+(sim->boxes->nLocalBoxes * MAXATOMS), i_size, hipMemcpyHostToDevice)); //TODO REmove?
+  CUDA_CHECK(hipMemcpy(gpu->atoms.iSpecies+(sim->boxes->nLocalBoxes * MAXATOMS), sim->atoms->iSpecies+(sim->boxes->nLocalBoxes * MAXATOMS), i_size, hipMemcpyHostToDevice)); //TODO remove?
 }
 
 void initLinkCellsGpu(SimFlat *sim, LinkCellGpu* boxes)
@@ -772,21 +789,21 @@ void initLinkCellsGpu(SimFlat *sim, LinkCellGpu* boxes)
   boxes->invBoxSize.z = sim->boxes->invBoxSize[2];
 
   assert (sim->boxes->nLocalBoxes == sim->boxes->gridSize[0] * sim->boxes->gridSize[1] * sim->boxes->gridSize[2]);
-  CUDA_CHECK(cudaMalloc((void**)&boxes->nAtoms, sim->boxes->nTotalBoxes * sizeof(int)));
-  CUDA_CHECK(cudaMalloc((void**)&boxes->boxIDLookUpReverse, sim->boxes->nLocalBoxes * sizeof(int3_t)));
-  CUDA_CHECK(cudaMalloc((void**)&boxes->boxIDLookUp, sim->boxes->nLocalBoxes * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&boxes->nAtoms, sim->boxes->nTotalBoxes * sizeof(int)));
+  CUDA_CHECK(hipMalloc((void**)&boxes->boxIDLookUpReverse, sim->boxes->nLocalBoxes * sizeof(int3_t)));
+  CUDA_CHECK(hipMalloc((void**)&boxes->boxIDLookUp, sim->boxes->nLocalBoxes * sizeof(int)));
 }
 
 void AnalyzeInput(SimFlat *sim, int step)
 {
   // copy positions data to host for all cells (including halos)
-  CUDA_CHECK(cudaMemcpy(sim->boxes->nAtoms, sim->gpu.boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->boxes->nAtoms, sim->gpu.boxes.nAtoms, sim->boxes->nTotalBoxes * sizeof(int), hipMemcpyDeviceToHost));
   int f_size = sim->boxes->nTotalBoxes * MAXATOMS * sizeof(real_t);
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.x, sim->gpu.atoms.r.x, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.y, sim->gpu.atoms.r.y, f_size, cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(sim->atoms->r.z, sim->gpu.atoms.r.z, f_size, cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.x, sim->gpu.atoms.r.x, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.y, sim->gpu.atoms.r.y, f_size, hipMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->atoms->r.z, sim->gpu.atoms.r.z, f_size, hipMemcpyDeviceToHost));
   sim->host.atoms.neighborList.nNeighbors = (int*)malloc(sim->atoms->nLocal * sizeof(int));
-  CUDA_CHECK(cudaMemcpy(sim->host.atoms.neighborList.nNeighbors, sim->gpu.atoms.neighborList.nNeighbors, sim->atoms->nLocal * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(hipMemcpy(sim->host.atoms.neighborList.nNeighbors, sim->gpu.atoms.neighborList.nNeighbors, sim->atoms->nLocal * sizeof(int), hipMemcpyDeviceToHost));
 
   GetDataFromGpu(sim);
 

@@ -33,7 +33,7 @@
 #include "gpu_types.h"
 #include <memory.h>
 
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
 #include <stdlib.h>
 
 #if defined(_WIN32) || defined(_WIN64) 
@@ -70,11 +70,11 @@ int compactHaloCells(SimFlat* sim, char* h_compactAtoms, int* h_cellOffset);
 
 #define CUDA_CHECK(command)											\
 {														\
-  cudaDeviceSynchronize(); \
-  cudaError_t status = (command);                                                                      		\
-  if (status != cudaSuccess) {                                                                                  \
+  hipDeviceSynchronize(); \
+  hipError_t status = (command);                                                                      		\
+  if (status != hipSuccess) {                                                                                  \
     fprintf(stderr, "Error in file %s at line %d\n", __FILE__, __LINE__);                                  	\
-    fprintf(stderr, "CUDA error %d: %s", status, cudaGetErrorString(status));                              	\
+    fprintf(stderr, "CUDA error %d: %s", status, hipGetErrorString(status));                              	\
     fprintf(stderr, "\n");                                                                                 	\
     exit(-1);                                                                                              	\
   }                                                                                                             \
@@ -84,13 +84,13 @@ int compactHaloCells(SimFlat* sim, char* h_compactAtoms, int* h_cellOffset);
 #ifdef DO_MPI
 #define CUDA_GET_LAST_ERROR \
 {														\
-  cudaDeviceSynchronize(); \
+  hipDeviceSynchronize(); \
   int rank; \
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); \
-  cudaError_t status = (cudaGetLastError());                                                                      		\
-  if (status != cudaSuccess) {                                                                                  \
+  hipError_t status = (hipGetLastError());                                                                      		\
+  if (status != hipSuccess) {                                                                                  \
     fprintf(stderr, "rank %d: Error in file %s at line %d\n", rank, __FILE__, __LINE__);                                  	\
-    fprintf(stderr, "CUDA error %d: %s", status, cudaGetErrorString(status));                              	\
+    fprintf(stderr, "CUDA error %d: %s", status, hipGetErrorString(status));                              	\
     fprintf(stderr, "\n");                                                                                 	\
     exit(-1);                                                                                              	\
   } \
@@ -98,11 +98,11 @@ int compactHaloCells(SimFlat* sim, char* h_compactAtoms, int* h_cellOffset);
 #else
 #define CUDA_GET_LAST_ERROR \
 {														\
-  cudaDeviceSynchronize(); \
-  cudaError_t status = (cudaGetLastError());                                                                      		\
-  if (status != cudaSuccess) {                                                                                  \
+  hipDeviceSynchronize(); \
+  hipError_t status = (hipGetLastError());                                                                      		\
+  if (status != hipSuccess) {                                                                                  \
     fprintf(stderr, "Error in file %s at line %d\n", __FILE__, __LINE__);                                  	\
-    fprintf(stderr, "CUDA error %d: %s", status, cudaGetErrorString(status));                              	\
+    fprintf(stderr, "CUDA error %d: %s", status, hipGetErrorString(status));                              	\
     fprintf(stderr, "\n");                                                                                 	\
     exit(-1);                                                                                              	\
   }                                                                                                             \
@@ -113,8 +113,10 @@ int compactHaloCells(SimFlat* sim, char* h_compactAtoms, int* h_cellOffset);
 #define CUDA_GET_LAST_ERROR 
 #endif
 
-
-
-
+#ifdef __HCC__
+#define gassert(cond)
+#else
+#define gassert(cond) assert(cond)
+#endif
 
 #endif

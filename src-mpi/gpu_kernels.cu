@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*************************************************************************
  * Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
  *
@@ -27,14 +28,13 @@
  ************************************************************************/
 
 #include <stdio.h>
-#include <assert.h>
+#include "defines.h"
 
 #include "CoMDTypes.h"
 #include "haloExchange.h"
 
 #include "gpu_types.h"
 #include "gpu_timestep.h"
-#include "defines.h"
 
 #include "gpu_utility.h"
 
@@ -53,30 +53,43 @@
 
 #include "hashTable.h"
 
+#if defined(__HCC__)
+#include "gpu_kernels.h"
+#include "parallel.h"
+#else
 #undef EXTERN_C
 #define EXTERN_C extern "C"
 #include "gpu_kernels.h"
-#undef EXTERN_C
 extern "C"
 {
 #include "parallel.h"
 }
+#endif
 
-extern "C"
+#ifndef __HCC__
+#define hipFuncCachePreferNone cudaFuncCachePreferNone
+#define hipFuncCachePreferShared cudaFuncCachePreferShared
+#define hipFuncCachePreferL1 cudaFuncCachePreferL1
+inline static hipError_t hipDeviceSetCacheConfig(hipFuncCache_t cacheConfig) {
+    return hipCUDAErrorTohipError(cudaDeviceSetCacheConfig(cacheConfig));
+}
+#endif
+
+EXTERN_C
 void ljForceGpu(SimGpu * sim, int interpolation, int num_cells, int * cells_list, real_t plcutoff, int method)
 {
     if(method != CTA_CELL)
-        cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+        hipDeviceSetCacheConfig(hipFuncCachePreferL1);
     else
-        cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
+        hipDeviceSetCacheConfig(hipFuncCachePreferShared);
   if(method == THREAD_ATOM)
   {
       int grid = (sim->a_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
       int block = THREAD_ATOM_CTA;
       if(interpolation == 0)
-          LJ_Force_thread_atom<<<grid, block>>>(*sim, (*sim).a_list);
+          hipLaunchKernelGGL((LJ_Force_thread_atom), dim3(grid), dim3(block), 0, 0, *sim, (*sim).a_list);
       else
-          LJ_Force_thread_atom_interpolation<<<grid, block>>>(*sim, (*sim).a_list);
+          hipLaunchKernelGGL((LJ_Force_thread_atom_interpolation), dim3(grid), dim3(block), 0, 0, *sim, (*sim).a_list);
   }
   else if(method == CTA_CELL)
   {
@@ -89,7 +102,7 @@ void ljForceGpu(SimGpu * sim, int interpolation, int num_cells, int * cells_list
 
           const real_t s6 = sigma*sigma*sigma*sigma*sigma*sigma;
 
-          LJ_Force_cta_cell<<<grid, block>>>(*sim, cells_list, sim->lj_pot.cutoff*sim->lj_pot.cutoff, s6);
+          hipLaunchKernelGGL((LJ_Force_cta_cell), dim3(grid), dim3(block), 0, 0, *sim, cells_list, sim->lj_pot.cutoff*sim->lj_pot.cutoff, s6);
       }
       else
       {
@@ -102,19 +115,19 @@ void ljForceGpu(SimGpu * sim, int interpolation, int num_cells, int * cells_list
 
           if(sim->genPairlist)
           {
-              LJ_Force_cta_cell_pairlist<true, PAIRLIST_ATOMS_PER_INT><<<grid, block>>>(*sim, cells_list, sim->lj_pot.cutoff*sim->lj_pot.cutoff, s6, plcutoff);
+              hipLaunchKernelGGL((LJ_Force_cta_cell_pairlist<true, PAIRLIST_ATOMS_PER_INT>), dim3(grid), dim3(block), 0, 0, *sim, cells_list, sim->lj_pot.cutoff*sim->lj_pot.cutoff, s6, plcutoff);
               sim->genPairlist = 0;
               sim->atoms.neighborList.forceRebuildFlag = 0;
           }
           else
           {
-              LJ_Force_cta_cell_pairlist<false, PAIRLIST_ATOMS_PER_INT><<<grid, block>>>(*sim, cells_list, sim->lj_pot.cutoff*sim->lj_pot.cutoff, s6, plcutoff);
+              hipLaunchKernelGGL((LJ_Force_cta_cell_pairlist<false, PAIRLIST_ATOMS_PER_INT>), dim3(grid), dim3(block), 0, 0, *sim, cells_list, sim->lj_pot.cutoff*sim->lj_pot.cutoff, s6, plcutoff);
           }
 
       }
   }
   if(method == CTA_CELL)
-      cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+      hipDeviceSetCacheConfig(hipFuncCachePreferL1);
 }
 
 template<int step>
@@ -148,7 +161,7 @@ int compute_eam_smem_size(SimGpu sim)
 }
 
 template<int step>
-void eamForce(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, int spline, cudaStream_t stream = NULL)
+void eamForce(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, int spline, hipStream_t stream = NULL)
 {
     assert(method < CPU_NL);
     if (method == CTA_CELL) {
@@ -163,28 +176,28 @@ void eamForce(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list
 
             int grid = (atoms_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
             int block = THREAD_ATOM_CTA;
-            EAM_Force_thread_atom<step, true><<<grid, block, 0, stream>>>(sim, atoms_list);
+            hipLaunchKernelGGL((EAM_Force_thread_atom<step, true>), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
         }
         else if (method == WARP_ATOM) {
             int block = WARP_ATOM_CTA;
             int grid = (atoms_list.n + (WARP_ATOM_CTA/WARP_SIZE)-1)/ (WARP_ATOM_CTA/WARP_SIZE);
-            EAM_Force_warp_atom<step, true><<<grid, block, 0, stream>>>(sim, atoms_list);
+            hipLaunchKernelGGL((EAM_Force_warp_atom<step, true>), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
         }
         else if (method == CTA_CELL) {
-            cudaDeviceSetCacheConfig(cudaFuncCachePreferShared); // necessary for good occupancy
+            hipDeviceSetCacheConfig(hipFuncCachePreferShared); // necessary for good occupancy
             int block = CTA_CELL_CTA;
             int grid = num_cells;
             int smem = compute_eam_smem_size<step>(sim);
-            EAM_Force_cta_cell<step, true><<<grid, block, smem, stream>>>(sim, cells_list);
-            cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+            hipLaunchKernelGGL((EAM_Force_cta_cell<step, true>), dim3(grid), dim3(block), smem, stream, sim, cells_list);
+            hipDeviceSetCacheConfig(hipFuncCachePreferL1);
         }else if (method == THREAD_ATOM_NL) {
             int grid = (atoms_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
             int block = THREAD_ATOM_CTA;
-            EAM_Force_thread_atom_NL<step, true><<<grid, block, 0, stream>>>(sim, atoms_list);
+            hipLaunchKernelGGL((EAM_Force_thread_atom_NL<step, true>), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
         }else if (method == WARP_ATOM_NL) {
             int grid = (atoms_list.n * KERNEL_PACKSIZE + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
             int block = THREAD_ATOM_CTA;
-            EAM_Force_warp_atom_NL<step, KERNEL_PACKSIZE, MAXNEIGHBORLISTSIZE, true><<<grid, block, 0, stream>>>(sim, atoms_list, sim.eam_pot.cutoff * sim.eam_pot.cutoff);
+            hipLaunchKernelGGL((EAM_Force_warp_atom_NL<step, KERNEL_PACKSIZE, MAXNEIGHBORLISTSIZE, true>), dim3(grid), dim3(block), 0, stream, sim, atoms_list, sim.eam_pot.cutoff * sim.eam_pot.cutoff);
         }
 
     }
@@ -194,35 +207,35 @@ void eamForce(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list
 
             int grid = (atoms_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
             int block = THREAD_ATOM_CTA;
-            EAM_Force_thread_atom<step, false><<<grid, block, 0, stream>>>(sim, atoms_list);
+            hipLaunchKernelGGL((EAM_Force_thread_atom<step, false>), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
         }
         else if (method == WARP_ATOM) {
             int block = WARP_ATOM_CTA;
             int grid = (atoms_list.n + (WARP_ATOM_CTA/WARP_SIZE)-1)/ (WARP_ATOM_CTA/WARP_SIZE);
-            EAM_Force_warp_atom<step, false><<<grid, block, 0, stream>>>(sim, atoms_list);
+            hipLaunchKernelGGL((EAM_Force_warp_atom<step, false>), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
         }
         else if (method == CTA_CELL) {
-            cudaDeviceSetCacheConfig(cudaFuncCachePreferShared); // necessary for good occupancy
+            hipDeviceSetCacheConfig(hipFuncCachePreferShared); // necessary for good occupancy
             int block = CTA_CELL_CTA;
             int grid = num_cells;
             int smem = compute_eam_smem_size<step>(sim);
-            EAM_Force_cta_cell<step, false><<<grid, block, smem, stream>>>(sim, cells_list);
-            cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+            hipLaunchKernelGGL((EAM_Force_cta_cell<step, false>), dim3(grid), dim3(block), smem, stream, sim, cells_list);
+            hipDeviceSetCacheConfig(hipFuncCachePreferL1);
         }else if (method == THREAD_ATOM_NL) {
             int grid = (atoms_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
             int block = THREAD_ATOM_CTA;
-            EAM_Force_thread_atom_NL<step, false><<<grid, block, 0, stream>>>(sim, atoms_list);
+            hipLaunchKernelGGL((EAM_Force_thread_atom_NL<step, false>), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
         }else if (method == WARP_ATOM_NL) {
             int grid = (atoms_list.n * KERNEL_PACKSIZE + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
             int block = THREAD_ATOM_CTA;
-            EAM_Force_warp_atom_NL<step, KERNEL_PACKSIZE, MAXNEIGHBORLISTSIZE, false><<<grid, block, 0, stream>>>(sim, atoms_list, sim.eam_pot.cutoff * sim.eam_pot.cutoff);
+            hipLaunchKernelGGL((EAM_Force_warp_atom_NL<step, KERNEL_PACKSIZE, MAXNEIGHBORLISTSIZE, false>), dim3(grid), dim3(block), 0, stream, sim, atoms_list, sim.eam_pot.cutoff * sim.eam_pot.cutoff);
         }
     }
     CUDA_GET_LAST_ERROR
 }
 
 template<>
-void eamForce<2>(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, int spline, cudaStream_t stream)
+void eamForce<2>(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, int spline, hipStream_t stream)
 {
   assert(method < CPU_NL);
   if (method == CTA_CELL) {
@@ -234,111 +247,111 @@ void eamForce<2>(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_l
   if (method == THREAD_ATOM || method == WARP_ATOM || method == THREAD_ATOM_NL || method == WARP_ATOM_NL) {
     int grid = (atoms_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
     int block = THREAD_ATOM_CTA;
-    EAM_Force_thread_atom2<<<grid, block, 0, stream>>>(sim, atoms_list);
+    hipLaunchKernelGGL((EAM_Force_thread_atom2), dim3(grid), dim3(block), 0, stream, sim, atoms_list);
   }
   else if (method == CTA_CELL) {
     int grid = num_cells;
     int block = CTA_CELL_CTA;
-    EAM_Force_cta_cell2<<<grid, block, 0, stream>>>(sim, cells_list);
+    hipLaunchKernelGGL((EAM_Force_cta_cell2), dim3(grid), dim3(block), 0, stream, sim, cells_list);
   }
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
-void updateNeighborsGpuAsync(SimGpu sim, int *temp, int nCells, int *cellList, cudaStream_t stream)
+EXTERN_C
+void updateNeighborsGpuAsync(SimGpu sim, int *temp, int nCells, int *cellList, hipStream_t stream)
 {
   // update # of neighbor atoms per cell - 1 thread per cell
   int block = THREAD_ATOM_CTA;
   int grid = (nCells + (block-1))/ block;
-  UpdateNeighborNumAtoms<<<grid, block, 0, stream>>>(sim, nCells, cellList, temp);
+  hipLaunchKernelGGL((UpdateNeighborNumAtoms), dim3(grid), dim3(block), 0, stream, sim, nCells, cellList, temp);
 
   // update atom indices - 1 CTA per cell
   grid = nCells;
-  UpdateNeighborAtomIndices<<<grid, block, 0, stream>>>(sim, nCells, cellList, temp);
+  hipLaunchKernelGGL((UpdateNeighborAtomIndices), dim3(grid), dim3(block), 0, stream, sim, nCells, cellList, temp);
 
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void updateNeighborsGpu(SimGpu sim, int *temp)
 {
   // update # of neighbor atoms per cell - 1 thread per cell
   int block = THREAD_ATOM_CTA;
   int grid = (sim.boxes.nLocalBoxes + (block-1))/ block;
-  UpdateNeighborNumAtoms<<<grid, block>>>(sim, sim.boxes.nLocalBoxes, NULL, temp);
+  hipLaunchKernelGGL((UpdateNeighborNumAtoms), dim3(grid), dim3(block), 0, 0, sim, sim.boxes.nLocalBoxes, nullptr, temp);
 
   // update atom indices - 1 CTA per cell
   grid = sim.boxes.nLocalBoxes;
-  UpdateNeighborAtomIndices<<<grid, block>>>(sim, sim.boxes.nLocalBoxes, NULL, temp);
+  hipLaunchKernelGGL((UpdateNeighborAtomIndices), dim3(grid), dim3(block), 0, 0, sim, sim.boxes.nLocalBoxes, nullptr, temp);
 
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void eamForce1Gpu(SimGpu sim, int method, int spline)
 {
-  cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+  hipDeviceSetCacheConfig(hipFuncCachePreferL1);
   eamForce<1>(sim, sim.a_list, sim.boxes.nLocalBoxes, NULL, method, spline);
   CUDA_GET_LAST_ERROR
 }
 
 // async launch, latency hiding opt
-extern "C"
-void eamForce1GpuAsync(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, cudaStream_t stream, int spline)
+EXTERN_C
+void eamForce1GpuAsync(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, hipStream_t stream, int spline)
 {
-  cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+  hipDeviceSetCacheConfig(hipFuncCachePreferL1);
   eamForce<1>(sim, atoms_list, num_cells, cells_list, method,spline, stream);
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void eamForce2Gpu(SimGpu sim, int method, int spline)
 {
   eamForce<2>(sim, sim.a_list, sim.boxes.nLocalBoxes, NULL, method, spline);
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
-void eamForce2GpuAsync(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, cudaStream_t stream, int spline)
+EXTERN_C
+void eamForce2GpuAsync(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, hipStream_t stream, int spline)
 {
   eamForce<2>(sim, atoms_list, num_cells, cells_list, method, spline, stream);
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void eamForce3Gpu(SimGpu sim, int method, int spline)
 {
   eamForce<3>(sim, sim.a_list, sim.boxes.nLocalBoxes, NULL, method, spline);
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
-void eamForce3GpuAsync(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, cudaStream_t stream, int spline)
+EXTERN_C
+void eamForce3GpuAsync(SimGpu sim, AtomListGpu atoms_list, int num_cells, int *cells_list, int method, hipStream_t stream, int spline)
 {
   eamForce<3>(sim, atoms_list, num_cells, cells_list, method, spline, stream);
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void advanceVelocityGpu(SimGpu sim, real_t dt)
 {
   if (sim.a_list.n == 0) return;
 
   int grid = (sim.a_list.n + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
-  AdvanceVelocity<<<grid, block>>>(sim, dt);
+  hipLaunchKernelGGL((AdvanceVelocity), dim3(grid), dim3(block), 0, 0, sim, dt);
 
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void advancePositionGpu(SimGpu* sim, real_t dt)
 {
   if (sim->a_list.n == 0) return;
 
   int grid = (sim->a_list.n + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
-  AdvancePosition<<<grid, block>>>(*sim, dt);
+  hipLaunchKernelGGL((AdvancePosition), dim3(grid), dim3(block), 0, 0, *sim, dt);
 
   //TODO: this functionality should not be here. It seems like a nasty side-effect. REFACTORING!
   sim->atoms.neighborList.updateNeighborListRequired = -1; //next call to neighborListUpdateRequired() will loop over all particles
@@ -376,12 +389,12 @@ __global__ void fill(int *cellOffsets, int nCells, int *num_atoms)
 /// @param [in] num_atoms number of atoms for each cell (of size nTotalBoxes)
 /// @param [out] nAtomsOffset result of the scan.
 /// @param [out] work Temporary array with minimum size of ceil((nCell+1)/256)
-void scanCells(int *d_cellOffsets, int nCells, int *cellList, int *num_atoms, int *work, cudaStream_t stream = NULL)
+void scanCells(int *d_cellOffsets, int nCells, int *cellList, int *num_atoms, int *work, hipStream_t stream = NULL)
 {
   // natoms[i] = num_atoms[cellList[i]]
   int block = THREAD_ATOM_CTA;
   int grid = (nCells + 1 + block-1) / block;
-  fill<<<grid, block, 0, stream>>>(d_cellOffsets, nCells, cellList, num_atoms);
+  hipLaunchKernelGGL((fill), dim3(grid), dim3(block), 0, stream, d_cellOffsets, nCells, cellList, num_atoms);
   CUDA_GET_LAST_ERROR
 
   // scan to compute linear index
@@ -390,12 +403,12 @@ void scanCells(int *d_cellOffsets, int nCells, int *cellList, int *num_atoms, in
   CUDA_GET_LAST_ERROR
 }
 
-void scanCells(int *natoms_buf, int nCells, int *num_atoms, int *work, cudaStream_t stream = NULL)
+void scanCells(int *natoms_buf, int nCells, int *num_atoms, int *work, hipStream_t stream = NULL)
 {
   // natoms[i] = num_atoms[i]
   int block = THREAD_ATOM_CTA;
   int grid = (nCells + 1 + block-1) / block;
-  fill<<<grid, block, 0, stream>>>(natoms_buf, nCells, num_atoms);
+  hipLaunchKernelGGL((fill), dim3(grid), dim3(block), 0, stream, natoms_buf, nCells, num_atoms);
   CUDA_GET_LAST_ERROR
 
   // scan to compute linear index
@@ -415,10 +428,10 @@ void BuildAtomLists(SimFlat *s)
   CUDA_GET_LAST_ERROR
   int *cell_offsets1;
   int *cell_offsets2;
-  cudaMalloc(&cell_offsets1, size * sizeof(int));
-  cudaMalloc(&cell_offsets2, size * sizeof(int));
+  hipMalloc(&cell_offsets1, size * sizeof(int));
+  hipMalloc(&cell_offsets2, size * sizeof(int));
   int *partial_sums;
-  cudaMalloc(&partial_sums, size * sizeof(int));
+  hipMalloc(&partial_sums, size * sizeof(int));
   CUDA_GET_LAST_ERROR
 
   scanCells(cell_offsets1, nCells, s->gpu.boxes.nAtoms, partial_sums);
@@ -426,7 +439,7 @@ void BuildAtomLists(SimFlat *s)
 
   int block = THREAD_ATOM_CTA;
   int grid = (nCells + (block/WARP_SIZE)-1)/(block/WARP_SIZE);
-  UpdateAtomList<<<grid, block>>>(s->gpu, s->gpu.a_list, nCells, cell_offsets1);
+  hipLaunchKernelGGL((UpdateAtomList), dim3(grid), dim3(block), 0, 0, s->gpu, s->gpu.a_list, nCells, cell_offsets1);
   CUDA_GET_LAST_ERROR
 
   // build interior & boundary lists
@@ -434,19 +447,19 @@ void BuildAtomLists(SimFlat *s)
   scanCells(cell_offsets2, n_interior_cells, s->interior_cells, s->gpu.boxes.nAtoms, partial_sums);
 
   grid = (s->n_boundary_cells + (block/WARP_SIZE)-1)/(block/WARP_SIZE);
-  UpdateBoundaryList<<<grid, block>>>(s->gpu, s->gpu.b_list, s->n_boundary_cells, cell_offsets1, s->boundary_cells);
+  hipLaunchKernelGGL((UpdateBoundaryList), dim3(grid), dim3(block), 0, 0, s->gpu, s->gpu.b_list, s->n_boundary_cells, cell_offsets1, s->boundary_cells);
   CUDA_GET_LAST_ERROR
 
   grid = (n_interior_cells + (block/WARP_SIZE)-1)/(block/WARP_SIZE);
-  UpdateBoundaryList<<<grid, block>>>(s->gpu, s->gpu.i_list, n_interior_cells, cell_offsets2, s->interior_cells);
+  hipLaunchKernelGGL((UpdateBoundaryList), dim3(grid), dim3(block), 0, 0, s->gpu, s->gpu.i_list, n_interior_cells, cell_offsets2, s->interior_cells);
   CUDA_GET_LAST_ERROR
 
-  cudaMemcpy(&s->gpu.b_list.n, cell_offsets1 + s->n_boundary_cells, sizeof(int), cudaMemcpyDeviceToHost);
-  cudaMemcpy(&s->gpu.i_list.n, cell_offsets2 + n_interior_cells, sizeof(int), cudaMemcpyDeviceToHost);
+  hipMemcpy(&s->gpu.b_list.n, cell_offsets1 + s->n_boundary_cells, sizeof(int), hipMemcpyDeviceToHost);
+  hipMemcpy(&s->gpu.i_list.n, cell_offsets2 + n_interior_cells, sizeof(int), hipMemcpyDeviceToHost);
 
-  cudaFree(partial_sums);
-  cudaFree(cell_offsets1);
-  cudaFree(cell_offsets2);
+  hipFree(partial_sums);
+  hipFree(cell_offsets1);
+  hipFree(cell_offsets2);
 
   CUDA_GET_LAST_ERROR
 }
@@ -464,37 +477,37 @@ void BuildAtomLists(SimFlat *s)
 /// to halo atoms.  Such atom must be sent to other tasks by a halo
 /// exchange to avoid being lost.
 /// \see redistributeAtoms
-extern "C"
+EXTERN_C
 void updateLinkCellsGpu(SimFlat *sim)
 {
   if (sim->gpu.a_list.n == 0) return;
 
   int *flags = sim->flags;
   //empty haloCells
-  cudaMemset(sim->gpu.boxes.nAtoms + sim->boxes->nLocalBoxes, 0, (sim->boxes->nTotalBoxes - sim->boxes->nLocalBoxes) * sizeof(int));
+  hipMemset(sim->gpu.boxes.nAtoms + sim->boxes->nLocalBoxes, 0, (sim->boxes->nTotalBoxes - sim->boxes->nLocalBoxes) * sizeof(int));
 
   // set all flags to 0
-  cudaMemset(flags, 0, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(int));
+  hipMemset(flags, 0, sim->boxes->nTotalBoxes * MAXATOMS * sizeof(int));
 
   // 1 thread updates 1 atom
   int grid = (sim->gpu.a_list.n + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
   if(sim->usePairlist)
-      UpdateLinkCells<true><<<grid, block>>>(sim->gpu, sim->gpu.boxes, flags);
+      hipLaunchKernelGGL((UpdateLinkCells<true>), dim3(grid), dim3(block), 0, 0, sim->gpu, sim->gpu.boxes, flags);
   else
-      UpdateLinkCells<false><<<grid, block>>>(sim->gpu, sim->gpu.boxes, flags);
+      hipLaunchKernelGGL((UpdateLinkCells<false>), dim3(grid), dim3(block), 0, 0, sim->gpu, sim->gpu.boxes, flags);
   CUDA_GET_LAST_ERROR
   // 1 thread updates 1 cell
   grid = (sim->boxes->nLocalBoxes + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   block = THREAD_ATOM_CTA;
   if(sim->usePairlist)
-      CompactAtoms<true><<<grid, block>>>(sim->gpu, sim->boxes->nLocalBoxes, flags);
+      hipLaunchKernelGGL((CompactAtoms<true>), dim3(grid), dim3(block), 0, 0, sim->gpu, sim->boxes->nLocalBoxes, flags);
   else
-      CompactAtoms<false><<<grid, block>>>(sim->gpu, sim->boxes->nLocalBoxes, flags);
+      hipLaunchKernelGGL((CompactAtoms<false>), dim3(grid), dim3(block), 0, 0, sim->gpu, sim->boxes->nLocalBoxes, flags);
   CUDA_GET_LAST_ERROR
 
   // update max # of atoms per cell
-  cudaMemcpy(&sim->gpu.max_atoms_cell, &flags[sim->boxes->nLocalBoxes * MAXATOMS], sizeof(int), cudaMemcpyDeviceToHost);
+  hipMemcpy(&sim->gpu.max_atoms_cell, &flags[sim->boxes->nLocalBoxes * MAXATOMS], sizeof(int), hipMemcpyDeviceToHost);
 
   // build new atom lists: only for thread/atom or warp/atom approaches
   if (sim->method == THREAD_ATOM || sim->method == WARP_ATOM || sim->method == THREAD_ATOM_NL || sim->method == WARP_ATOM_NL)
@@ -503,7 +516,7 @@ void updateLinkCellsGpu(SimFlat *sim)
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void getAtomMsgSoAPtr(char* const buffer, AtomMsgSoA *atomMsg, int n)
 {
         atomMsg->gid  =  (int*) buffer;
@@ -522,8 +535,8 @@ void getAtomMsgSoAPtr(char* const buffer, AtomMsgSoA *atomMsg, int n)
 /// @param [in] cellList Device-pointer. Holds the cell id of the cells of interest
 /// @param [in] nAtomsCell Device-pointer. Holds the number of cells of each cell (most likely sim->boxes->nAtoms)
 /// @param [out] d_cellOffsets Device-pointer. On-exit: Contains the starting offsets for each cell within d_compactAtoms. (e.g.: numAtoms(0)=3, numAtoms(1)=2 => cellOffsets(0)=0,cellOffsets(1)=3,cellOffsets(2)=5)
-extern "C"
-int compactCellsGpu(char* d_compactAtoms, int nCells, int *d_cellList, SimGpu sim_gpu, int* d_cellOffsets, int * d_workScan, real3_old shift, cudaStream_t stream)
+EXTERN_C
+int compactCellsGpu(char* d_compactAtoms, int nCells, int *d_cellList, SimGpu sim_gpu, int* d_cellOffsets, int * d_workScan, real3_old shift, hipStream_t stream)
 {
 
     // compute starting offsets for each cell within the compacted array
@@ -531,8 +544,8 @@ int compactCellsGpu(char* d_compactAtoms, int nCells, int *d_cellList, SimGpu si
 
     int nTotalAtomsCellList;
     // the last entry of d_nAtomsOffset will store the total number of atoms within all specified cells
-    cudaMemcpyAsync(&nTotalAtomsCellList, d_cellOffsets + nCells, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    hipMemcpyAsync(&nTotalAtomsCellList, d_cellOffsets + nCells, sizeof(int), hipMemcpyDeviceToHost, stream);
+    hipStreamSynchronize(stream);
 
     //alias host and device buffers with AtomMsgSoA
     AtomMsgSoA msg_d;
@@ -541,7 +554,7 @@ int compactCellsGpu(char* d_compactAtoms, int nCells, int *d_cellList, SimGpu si
     //assemble compact array of particles
     int block = MAXATOMS;
     int grid = nCells;
-    LoadAtomsBufferPacked<<<grid, block,0,stream>>>(msg_d, d_cellList, sim_gpu, d_cellOffsets, shift[0], shift[1], shift[2]);
+    hipLaunchKernelGGL((LoadAtomsBufferPacked), dim3(grid), dim3(block), 0, stream, msg_d, d_cellList, sim_gpu, d_cellOffsets, shift[0], shift[1], shift[2]);
     CUDA_GET_LAST_ERROR
 
     return nTotalAtomsCellList;
@@ -550,8 +563,8 @@ int compactCellsGpu(char* d_compactAtoms, int nCells, int *d_cellList, SimGpu si
 /// builds sim->gpu.a_list
 /// @param [out] natoms_buf (temporary)
 /// @param [out] partial_sums (temporary)
-extern "C"
-void buildAtomListGpu(SimFlat *sim, cudaStream_t stream)
+EXTERN_C
+void buildAtomListGpu(SimFlat *sim, hipStream_t stream)
 {
   int* natoms_buf = ((AtomExchangeParms*)(sim->atomExchange->parms))->d_natoms_buf;
   int *partial_sums = ((AtomExchangeParms*)(sim->atomExchange->parms))->d_partial_sums;
@@ -561,10 +574,10 @@ void buildAtomListGpu(SimFlat *sim, cudaStream_t stream)
   // rebuild compact list of atoms & cells
   int grid = (nCells * MAXATOMS + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
-  UpdateCompactIndices<<<grid, block, 0, stream>>>(natoms_buf, nCells, sim->gpu);
+  hipLaunchKernelGGL((UpdateCompactIndices), dim3(grid), dim3(block), 0, stream, natoms_buf, nCells, sim->gpu);
 
   // new number of local atoms
-  cudaMemcpyAsync(&(sim->gpu.a_list.n), natoms_buf + nCells, sizeof(int), cudaMemcpyDeviceToHost, stream);
+  hipMemcpyAsync(&(sim->gpu.a_list.n), natoms_buf + nCells, sizeof(int), hipMemcpyDeviceToHost, stream);
 
   CUDA_GET_LAST_ERROR
 }
@@ -581,11 +594,11 @@ void buildAtomListGpu(SimFlat *sim, cudaStream_t stream)
 /// @param buf [in] Pointer to the received data
 /// @param sim [inout] The gpu field of sim will be updated
 /// @param gpu_buf [out] Already allocated gpu buffer (temporary)
-extern "C"
-void unloadAtomsBufferToGpu(char *buf, int nBuf, SimFlat *sim, char *gpu_buf, cudaStream_t stream)
+EXTERN_C
+void unloadAtomsBufferToGpu(char *buf, int nBuf, SimFlat *sim, char *gpu_buf, hipStream_t stream)
 {
   if (nBuf == 0) return;
-  cudaMemcpyAsync(gpu_buf, buf, nBuf * sizeof(AtomMsg), cudaMemcpyHostToDevice, stream);
+  hipMemcpyAsync(gpu_buf, buf, nBuf * sizeof(AtomMsg), hipMemcpyHostToDevice, stream);
 
   // TODO: don't need to check if we're running cell-based approach
   int nlUpdateRequired = neighborListUpdateRequiredGpu(&(sim->gpu));
@@ -610,7 +623,7 @@ void unloadAtomsBufferToGpu(char *buf, int nBuf, SimFlat *sim, char *gpu_buf, cu
   computeOffsets(nlUpdateRequired, sim, r, d_iOffset, d_boxId, nBuf, stream);
 
   // map received particles to cells
-  UnloadAtomsBufferPacked<<<grid, block, 0, stream>>>(r, p, type, gid, nBuf, sim->gpu.atoms, d_iOffset);
+  hipLaunchKernelGGL((UnloadAtomsBufferPacked), dim3(grid), dim3(block), 0, stream, r, p, type, gid, nBuf, sim->gpu.atoms, d_iOffset);
 
   CUDA_GET_LAST_ERROR
 }
@@ -618,8 +631,8 @@ void unloadAtomsBufferToGpu(char *buf, int nBuf, SimFlat *sim, char *gpu_buf, cu
 /// The loadBuffer function for a force exchange.
 /// Iterate the send list and load the derivative of the embedding
 /// energy with respect to the local density into the send buffer.
-extern "C"
-void loadForceBufferFromGpu(char *buf, int *nbuf, int nCells, int *cellList, int *natoms_buf, int *partial_sums, SimFlat *s, char *gpu_buf, cudaStream_t stream)
+EXTERN_C
+void loadForceBufferFromGpu(char *buf, int *nbuf, int nCells, int *cellList, int *natoms_buf, int *partial_sums, SimFlat *s, char *gpu_buf, hipStream_t stream)
 {
   CUDA_GET_LAST_ERROR
   scanCells(natoms_buf, nCells, cellList, s->gpu.boxes.nAtoms, partial_sums, stream);
@@ -627,16 +640,16 @@ void loadForceBufferFromGpu(char *buf, int *nbuf, int nCells, int *cellList, int
   // copy data to compacted array
   int grid = (nCells * MAXATOMS + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
-  LoadForceBuffer<<<grid, block, 0, stream>>>((ForceMsg*)gpu_buf, nCells, cellList, s->gpu, natoms_buf);
+  hipLaunchKernelGGL((LoadForceBuffer), dim3(grid), dim3(block), 0, stream, (ForceMsg*)gpu_buf, nCells, cellList, s->gpu, natoms_buf);
   CUDA_GET_LAST_ERROR
 
   int nBuf;
-  cudaMemcpyAsync(&nBuf, natoms_buf + nCells, sizeof(int), cudaMemcpyDeviceToHost, stream);
+  hipMemcpyAsync(&nBuf, natoms_buf + nCells, sizeof(int), hipMemcpyDeviceToHost, stream);
   CUDA_GET_LAST_ERROR
-  cudaMemcpyAsync(buf, gpu_buf, nBuf * sizeof(ForceMsg), cudaMemcpyDeviceToHost, stream);
+  hipMemcpyAsync(buf, gpu_buf, nBuf * sizeof(ForceMsg), hipMemcpyDeviceToHost, stream);
   CUDA_GET_LAST_ERROR
 
-  cudaStreamSynchronize(stream);
+  hipStreamSynchronize(stream);
   *nbuf = nBuf;
   CUDA_GET_LAST_ERROR
 }
@@ -644,68 +657,68 @@ void loadForceBufferFromGpu(char *buf, int *nbuf, int nCells, int *cellList, int
 /// The unloadBuffer function for a force exchange.
 /// Data is received in an order that naturally aligns with the atom
 /// storage so it is simple to put the data where it belongs.
-extern "C"
-void unloadForceBufferToGpu(char *buf, int nBuf, int nCells, int *cellList, int *natoms_buf, int *partial_sums, SimFlat *s, char *gpu_buf, cudaStream_t stream)
+EXTERN_C
+void unloadForceBufferToGpu(char *buf, int nBuf, int nCells, int *cellList, int *natoms_buf, int *partial_sums, SimFlat *s, char *gpu_buf, hipStream_t stream)
 {
   // copy raw data to gpu
-  cudaMemcpyAsync(gpu_buf, buf, nBuf * sizeof(ForceMsg), cudaMemcpyHostToDevice, stream);
+  hipMemcpyAsync(gpu_buf, buf, nBuf * sizeof(ForceMsg), hipMemcpyHostToDevice, stream);
 
   scanCells(natoms_buf, nCells, cellList, s->gpu.boxes.nAtoms, partial_sums, stream);
 
   // copy data for the list of cells
   int grid = (nCells * MAXATOMS + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
-  UnloadForceBuffer<<<grid, block, 0, stream>>>((ForceMsg*)gpu_buf, nCells, cellList, s->gpu, natoms_buf);
+  hipLaunchKernelGGL((UnloadForceBuffer), dim3(grid), dim3(block), 0, stream, (ForceMsg*)gpu_buf, nCells, cellList, s->gpu, natoms_buf);
 
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
-void sortAtomsGpu(SimFlat *s, cudaStream_t stream)
+EXTERN_C
+void sortAtomsGpu(SimFlat *s, hipStream_t stream)
 {
   int *new_indices = s->flags;
   // set all indices to -1
-  cudaMemsetAsync(new_indices, 255, s->boxes->nTotalBoxes * MAXATOMS * sizeof(int), stream);
+  hipMemsetAsync(new_indices, 255, s->boxes->nTotalBoxes * MAXATOMS * sizeof(int), stream);
 
   // one thread per atom, only update boundary cells
   int block = MAXATOMS;
   int grid = (s->n_boundary1_cells * WARP_SIZE + block-1)/block;
-  SetLinearIndices<<<grid, block, 0, stream>>>(s->gpu, s->n_boundary1_cells, s->boundary1_cells_d, new_indices);
+  hipLaunchKernelGGL((SetLinearIndices), dim3(grid), dim3(block), 0, stream, s->gpu, s->n_boundary1_cells, s->boundary1_cells_d, new_indices);
   CUDA_GET_LAST_ERROR
 
   // update halo cells
   grid = ((s->boxes->nTotalBoxes - s->boxes->nLocalBoxes) * MAXATOMS + block-1)/block;
-  SetLinearIndices<<<grid, block, 0, stream>>>(s->gpu, s->boxes->nLocalBoxes, s->boxes->nTotalBoxes, new_indices);
+  hipLaunchKernelGGL((SetLinearIndices), dim3(grid), dim3(block), 0, stream, s->gpu, s->boxes->nLocalBoxes, s->boxes->nTotalBoxes, new_indices);
   CUDA_GET_LAST_ERROR
 
   // one thread per cell: process halo & boundary cells only
   int block2 = MAXATOMS;
   int grid2 = (s->n_boundary1_cells + (s->boxes->nTotalBoxes - s->boxes->nLocalBoxes) + block2-1) / block2;
-  SortAtomsByGlobalId<<<grid2, block2, 0, stream>>>(s->gpu, s->boxes->nLocalBoxes, s->boxes->nTotalBoxes, s->boundary1_cells_d, s->n_boundary1_cells, new_indices, s->tmp_sort);
+  hipLaunchKernelGGL((SortAtomsByGlobalId), dim3(grid2), dim3(block2), 0, stream, s->gpu, s->boxes->nLocalBoxes, s->boxes->nTotalBoxes, s->boundary1_cells_d, s->n_boundary1_cells, new_indices, s->tmp_sort);
   CUDA_GET_LAST_ERROR
 
   // one warp per cell
   int block3 = THREAD_ATOM_CTA;
   int grid3 = ((s->n_boundary1_cells + (s->boxes->nTotalBoxes - s->boxes->nLocalBoxes)) * WARP_SIZE + block3-1) / block3;
-  ShuffleAtomsData<<<grid3, block3, 0, stream>>>(s->gpu, s->boxes->nLocalBoxes, s->boxes->nTotalBoxes, s->boundary1_cells_d, s->n_boundary1_cells, new_indices);
+  hipLaunchKernelGGL((ShuffleAtomsData), dim3(grid3), dim3(block3), 0, stream, s->gpu, s->boxes->nLocalBoxes, s->boxes->nTotalBoxes, s->boundary1_cells_d, s->n_boundary1_cells, new_indices);
 
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void computeEnergy(SimFlat *flat, real_t *eLocal)
 {
   if (flat->gpu.a_list.n == 0) return;
 
   real_t *e_gpu;
-  cudaMalloc(&e_gpu, 2 * sizeof(real_t));
-  cudaMemset(e_gpu, 0, 2 * sizeof(real_t));
+  hipMalloc(&e_gpu, 2 * sizeof(real_t));
+  hipMemset(e_gpu, 0, 2 * sizeof(real_t));
 
   int grid = (flat->gpu.a_list.n + (THREAD_ATOM_CTA-1)) / THREAD_ATOM_CTA;
   int block = THREAD_ATOM_CTA;
-  ReduceEnergy<<<grid, block>>>(flat->gpu, &e_gpu[0], &e_gpu[1]);
+  hipLaunchKernelGGL((ReduceEnergy), dim3(grid), dim3(block), 0, 0, flat->gpu, &e_gpu[0], &e_gpu[1]);
 
-  cudaMemcpy(eLocal, e_gpu, 2 * sizeof(real_t), cudaMemcpyDeviceToHost);
+  hipMemcpy(eLocal, e_gpu, 2 * sizeof(real_t), hipMemcpyDeviceToHost);
 
   CUDA_GET_LAST_ERROR
 }
@@ -724,13 +737,13 @@ void emptyNeighborListGpuKernel(SimGpu sim, int boundaryFlag)
 }
 
 /// Sets all neighbor counts to zero
-extern "C"
+EXTERN_C
 void emptyNeighborListGpu(SimGpu *sim, int boundaryFlag)
 {
 
     int grid = (sim->a_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
     int block = THREAD_ATOM_CTA;
-    emptyNeighborListGpuKernel<<<grid,block>>>(*sim, boundaryFlag);
+    hipLaunchKernelGGL((emptyNeighborListGpuKernel), dim3(grid), dim3(block), 0, 0, *sim, boundaryFlag);
 
   CUDA_GET_LAST_ERROR
 }
@@ -739,7 +752,9 @@ void emptyNeighborListGpu(SimGpu *sim, int boundaryFlag)
   * Checks if any atom has moved more than half of the skin distance
   */
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, THREAD_ATOM_ACTIVE_CTAS)
+#endif
 void updateNeighborListRequiredKernel(SimGpu sim, int* updateNeighborListRequired)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -760,7 +775,9 @@ void updateNeighborListRequiredKernel(SimGpu sim, int* updateNeighborListRequire
 }
 
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(CTA_CELL_CTA,CTA_CELL_ACTIVE_CTAS)
+#endif
 void updatePairlistRequiredKernel(SimGpu sim, int * updatePairlistRequired)
 {
     const int iBox = blockIdx.x;
@@ -784,7 +801,7 @@ void updatePairlistRequiredKernel(SimGpu sim, int * updatePairlistRequired)
 }
 
 // Function checks
-extern "C"
+EXTERN_C
 int pairlistUpdateRequiredGpu(SimGpu * sim)
 {
     if(sim->atoms.neighborList.forceRebuildFlag == 1)
@@ -797,13 +814,13 @@ int pairlistUpdateRequiredGpu(SimGpu * sim)
         int block = CTA_CELL_CTA;
         int *d_updatePairlistRequired;
         int h_updatePairlistRequired;
-        cudaMalloc(&d_updatePairlistRequired, sizeof(int));
-        cudaMemset(d_updatePairlistRequired, 0, sizeof(int));
+        hipMalloc(&d_updatePairlistRequired, sizeof(int));
+        hipMemset(d_updatePairlistRequired, 0, sizeof(int));
 
-        updatePairlistRequiredKernel<<<grid, block>>>(*sim, d_updatePairlistRequired);
+        hipLaunchKernelGGL((updatePairlistRequiredKernel), dim3(grid), dim3(block), 0, 0, *sim, d_updatePairlistRequired);
         CUDA_GET_LAST_ERROR
 
-        cudaMemcpy(&h_updatePairlistRequired,d_updatePairlistRequired, sizeof(int), cudaMemcpyDeviceToHost);
+        hipMemcpy(&h_updatePairlistRequired,d_updatePairlistRequired, sizeof(int), hipMemcpyDeviceToHost);
 
         int tmpUpdatePairlistRequired = h_updatePairlistRequired;
 
@@ -817,7 +834,7 @@ int pairlistUpdateRequiredGpu(SimGpu * sim)
 
 /// \param [inout] neighborList NeighborList (the only value that might be changed is updateNeighborListRequired
 /// \return 1 iff neighborlist update is required in this step
-extern "C"
+EXTERN_C
 int neighborListUpdateRequiredGpu(SimGpu* sim)
 {
         if(sim->atoms.neighborList.forceRebuildFlag== 1){
@@ -829,13 +846,13 @@ int neighborListUpdateRequiredGpu(SimGpu* sim)
                 int block = THREAD_ATOM_CTA;
                 int *d_updateNeighborListRequired;
                 int h_updateNeighborListRequired;
-                cudaMalloc(&d_updateNeighborListRequired, sizeof(int));
+                hipMalloc(&d_updateNeighborListRequired, sizeof(int));
 
-                cudaMemset(d_updateNeighborListRequired, 0, sizeof(int));
-                updateNeighborListRequiredKernel<<<grid, block>>>(*sim, d_updateNeighborListRequired);
+                hipMemset(d_updateNeighborListRequired, 0, sizeof(int));
+                hipLaunchKernelGGL((updateNeighborListRequiredKernel), dim3(grid), dim3(block), 0, 0, *sim, d_updateNeighborListRequired);
 
-                cudaMemcpy(&h_updateNeighborListRequired,d_updateNeighborListRequired, sizeof(int), cudaMemcpyDeviceToHost);
-                cudaFree(d_updateNeighborListRequired);
+                hipMemcpy(&h_updateNeighborListRequired,d_updateNeighborListRequired, sizeof(int), hipMemcpyDeviceToHost);
+                hipFree(d_updateNeighborListRequired);
 
                 int tmpUpdateNeighborListRequired = 0;
                 //TODO this function needs to be called for multi-node correctness. However, there are (most likely) other things that case bugs with the
@@ -865,22 +882,24 @@ int neighborListUpdateRequiredGpu(SimGpu* sim)
 //> boundaryFlag is BOUNDARY, INTERNAL or BOTH
 template<int maxNeighbors, int packSize, int logPackSize, int memoryPackSize, int boundaryFlag>
     __global__
-    __launch_bounds__(packSize * 32, 1)
+#ifdef LAUNCH_BOUNDS
+    __launch_bounds__(packSize * WARP_SIZE, 1)
+#endif
 void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
 {
-    __shared__ int temp[32 * maxNeighbors];
+    __shared__ int temp[WARP_SIZE * maxNeighbors];
 
     const int atid = threadIdx.x / packSize;
-    const int laneid = threadIdx.x & 31;
-    const int tid = blockIdx.x * 32 + atid;
+    const int laneid = threadIdx.x & (WARP_SIZE - 1);
+    const int tid = blockIdx.x * WARP_SIZE + atid;
     int * __restrict__ neighborList;
 
-    const unsigned int tmpmask = (1 << laneid) - 1;
+    const unsigned long long int tmpmask = (((unsigned long long int)1) << laneid) - 1;
 
-    const unsigned int tmpmask2 = ~((1 << (laneid - (laneid & (packSize-1)))) - 1);
-    const unsigned int mask = tmpmask2 & tmpmask;
+    const unsigned long long int tmpmask2 = ~((((unsigned long long int)1) << (laneid - (laneid & (packSize-1)))) - 1);
+    const unsigned long long int mask = tmpmask2 & tmpmask;
 
-    const unsigned int mask2 = ((1 << packSize) - 1) << ((laneid / packSize) << logPackSize);
+    const unsigned long long int mask2 = ((((unsigned long long int)1) << packSize) - 1) << ((laneid / packSize) << logPackSize);
 
     const int ldNeighborList = sim.atoms.neighborList.nMaxLocal*memoryPackSize; //leading dimension
     int* __restrict__ nNeighborsArray = sim.atoms.neighborList.nNeighbors;
@@ -894,7 +913,7 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
         if(boundaryFlag == INTERIOR && sim.cell_type[iBox] == 1) return;
 
         const int iOff = iBox * MAXATOMS + iAtom;
-        assert(iOff < sim.boxes.nLocalBoxes * MAXATOMS && iOff >=0 );
+        gassert(iOff < sim.boxes.nLocalBoxes * MAXATOMS && iOff >=0 );
 
         // fetch position
         real_t *const __restrict__ rx = sim.atoms.r.x;
@@ -902,7 +921,7 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
         real_t *const __restrict__ rz = sim.atoms.r.z;
 
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
         real_t irx = __ldg(rx + iOff);
         real_t iry = __ldg(ry + iOff);
         real_t irz = __ldg(rz + iOff);
@@ -913,8 +932,8 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
 #endif
         //get NL related data
         const int iLid = tid;
-        assert( iLid < sim.atoms.neighborList.nMaxLocal );
-        //assert(iLid<ldNeighborList);
+        gassert( iLid < sim.atoms.neighborList.nMaxLocal );
+        //gassert(iLid<ldNeighborList);
         neighborList = sim.atoms.neighborList.list;
         int nNeighbors = 0;
         const int id = threadIdx.x & (packSize -1);
@@ -944,12 +963,12 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
             for (int jAtom = jOffset; jAtom < nJBox; jAtom += packSize)
             {
                 const int jOff = jAtom +id;
-                assert(jOff < sim.boxes.nTotalBoxes * MAXATOMS && jOff >=0 );
+                gassert(jOff < sim.boxes.nTotalBoxes * MAXATOMS && jOff >=0 );
 
                 real_t r2;
                 if(jOff < nJBox)
                 {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
                     real_t dx = irx - __ldg(rx);
                     real_t dy = iry - __ldg(ry);
                     real_t dz = irz - __ldg(rz);
@@ -968,17 +987,17 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
                     r2 = 0.0;
 
                 bool flag = r2 <= rCut2 && r2 > 0.0;
-                unsigned int x;
+                unsigned long long int x;
                 int n;
                 if(x = __ballot(flag))
                 {
                 //Scan
                     x = x & mask2;
-                    n = __popc(x);
+                    n = __popcll(x);
                     x = x & mask;
-                    const int p = __popc(x);
+                    const int p = __popcll(x);
                     const int place = nNeighbors + p;
-                    if (flag) mytemp[(place/memoryPackSize) * 32 * memoryPackSize + (place & (memoryPackSize-1))] = jOff;
+                    if (flag) mytemp[(place/memoryPackSize) * WARP_SIZE * memoryPackSize + (place & (memoryPackSize-1))] = jOff;
                     nNeighbors += n;
                 }
 
@@ -1002,12 +1021,12 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
             for (int jAtom = jOffset; jAtom < nJBox; jAtom += packSize)
             {
                 const int jOff = jAtom +id;
-                assert(jOff < sim.boxes.nTotalBoxes * MAXATOMS && jOff >=0 );
+                gassert(jOff < sim.boxes.nTotalBoxes * MAXATOMS && jOff >=0 );
 
                 real_t r2;
                 if(jOff < nJBox)
                 {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
                     real_t dx = irx - __ldg(rx);
                     real_t dy = iry - __ldg(ry);
                     real_t dz = irz - __ldg(rz);
@@ -1027,17 +1046,17 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
 
                 //r2 is never 0
                 bool flag = r2 <= rCut2;
-                unsigned int x;
+                unsigned long long int x;
                 int n;
                 if(x = __ballot(flag))
                 {
                 //Scan
                     x = x & mask2;
-                    n = __popc(x);
+                    n = __popcll(x);
                     x = x & mask;
-                    const int p = __popc(x);
+                    const int p = __popcll(x);
                     const int place = nNeighbors + p;
-                    if (flag) mytemp[(place/memoryPackSize) * 32 * memoryPackSize + (place & (memoryPackSize-1))] = jOff;
+                    if (flag) mytemp[(place/memoryPackSize) * WARP_SIZE * memoryPackSize + (place & (memoryPackSize-1))] = jOff;
                     nNeighbors += n;
                 }
 
@@ -1051,15 +1070,15 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
     }
     __syncthreads();
 
-    const int gtid = blockIdx.x * 32 * memoryPackSize + threadIdx.x;
+    const int gtid = blockIdx.x * WARP_SIZE * memoryPackSize + threadIdx.x;
     const int iLid = gtid / memoryPackSize;
-    if(iLid < sim.a_list.n && threadIdx.x < 32 * memoryPackSize)
+    if(iLid < sim.a_list.n && threadIdx.x < WARP_SIZE * memoryPackSize)
     {
 #pragma unroll
         for(int i = 0; i < maxNeighbors/memoryPackSize;++i)
         {
-            assert(threadIdx.x + i * 32 * memoryPackSize < 32 * maxNeighbors);
-            neighborList[gtid + i * ldNeighborList] = temp[threadIdx.x + i * 32 * memoryPackSize];
+            gassert(threadIdx.x + i * WARP_SIZE * memoryPackSize < WARP_SIZE * maxNeighbors);
+            neighborList[gtid + i * ldNeighborList] = temp[threadIdx.x + i * WARP_SIZE * memoryPackSize];
         }
     }
 }
@@ -1067,14 +1086,16 @@ void buildNeighborListKernel_warp(SimGpu sim, real_t rCut2)
 
 template<int maxNeighbors, int packSize, int logPackSize, int boundaryFlag>
     __global__
-    __launch_bounds__(packSize * 32, 2)
+#ifdef LAUNCH_BOUNDS
+    __launch_bounds__(packSize * WARP_SIZE, 2)
+#endif
 void buildNeighborListKernel(SimGpu sim)
 {
-    __shared__ int temp[32 * maxNeighbors];
+    __shared__ int temp[WARP_SIZE * maxNeighbors];
 
     const int atid = threadIdx.x / packSize;
-    const int laneid = threadIdx.x & 31;
-    const int tid = blockIdx.x * 32 + atid;
+    const int laneid = threadIdx.x & (WARP_SIZE - 1);
+    const int tid = blockIdx.x * WARP_SIZE + atid;
     int * __restrict__ neighborList;
 
     const unsigned int tmpmask = (1 << laneid) - 1;
@@ -1094,7 +1115,7 @@ void buildNeighborListKernel(SimGpu sim)
         int iAtom = sim.a_list.atoms[tid];
         int iBox = sim.a_list.cells[tid];
 
-        //assert(sim.cell_type[iBox] == 0 || sim.cell_type[iBox] == 1);
+        //gassert(sim.cell_type[iBox] == 0 || sim.cell_type[iBox] == 1);
         if(boundaryFlag == BOUNDARY && sim.cell_type[iBox] == 0) return;
         if(boundaryFlag == INTERIOR && sim.cell_type[iBox] == 1) return;
 
@@ -1109,7 +1130,7 @@ void buildNeighborListKernel(SimGpu sim)
         real_t *const __restrict__ rz = sim.atoms.r.z;
 
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
         real_t irx = __ldg(rx + iOff);
         real_t iry = __ldg(ry + iOff);
         real_t irz = __ldg(rz + iOff);
@@ -1153,7 +1174,7 @@ void buildNeighborListKernel(SimGpu sim)
                 real_t r2;
                 if(jOff < nJBox)
                 {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
                     real_t dx = irx - __ldg(rx);
                     real_t dy = iry - __ldg(ry);
                     real_t dz = irz - __ldg(rz);
@@ -1181,7 +1202,7 @@ void buildNeighborListKernel(SimGpu sim)
                     n = __popc(x);
                     x = x & mask;
                     const int p = __popc(x);
-                    if (flag) mytemp[(nNeighbors+p)*32] = jOff;
+                    if (flag) mytemp[(nNeighbors+p)*WARP_SIZE] = jOff;
                     nNeighbors += n;
                 }
 
@@ -1209,7 +1230,7 @@ void buildNeighborListKernel(SimGpu sim)
                 real_t r2;
                 if(jOff < nJBox)
                 {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 350
+#if HAS_LDG
                     real_t dx = irx - __ldg(rx);
                     real_t dy = iry - __ldg(ry);
                     real_t dz = irz - __ldg(rz);
@@ -1237,7 +1258,7 @@ void buildNeighborListKernel(SimGpu sim)
                     n = __popc(x);
                     x = x & mask;
                     const int p = __popc(x);
-                    if (flag) mytemp[(nNeighbors+p)*32] = jOff;
+                    if (flag) mytemp[(nNeighbors+p)*WARP_SIZE] = jOff;
                     nNeighbors += n;
                 }
 
@@ -1248,21 +1269,23 @@ void buildNeighborListKernel(SimGpu sim)
             nNeighborsArray[iLid] = nNeighbors;
     }
     __syncthreads();
-    const int iLid = blockIdx.x * 32 + laneid;
+    const int iLid = blockIdx.x * WARP_SIZE + laneid;
     int N;
     if(iLid < sim.a_list.n)
         N = nNeighborsArray[iLid];
     else
         N = 0;
-    for(int i = threadIdx.x >> 5; i < N; i += packSize)
+    for(int i = threadIdx.x / WARP_SIZE; i < N; i += packSize)
     {
-        neighborList[iLid + i * ldNeighborList] = temp[(i<<5)+(threadIdx.x&31)];
+        neighborList[iLid + i * ldNeighborList] = temp[i*WARP_SIZE+(threadIdx.x&(WARP_SIZE-1))];
     }
 }
 
 template<int boundaryFlag>
 __global__
+#ifdef LAUNCH_BOUNDS
 __launch_bounds__(THREAD_ATOM_CTA, THREAD_ATOM_ACTIVE_CTAS)
+#endif
 void buildNeighborListKernel_thread(SimGpu sim)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1272,13 +1295,13 @@ void buildNeighborListKernel_thread(SimGpu sim)
   int iAtom = sim.a_list.atoms[tid];
   int iBox = sim.a_list.cells[tid];
 
-  assert(sim.cell_type[iBox] == 0 || sim.cell_type[iBox] == 1);
-  assert(iBox < sim.boxes.nLocalBoxes && iBox >= 0);
+  gassert(sim.cell_type[iBox] == 0 || sim.cell_type[iBox] == 1);
+  gassert(iBox < sim.boxes.nLocalBoxes && iBox >= 0);
   if(boundaryFlag == BOUNDARY && sim.cell_type[iBox] == 0) return;
   if(boundaryFlag == INTERIOR && sim.cell_type[iBox] == 1) return;
 
   int iOff = iBox * MAXATOMS + iAtom;
-  assert(iOff < sim.boxes.nLocalBoxes * MAXATOMS && iOff >=0 );
+  gassert(iOff < sim.boxes.nLocalBoxes * MAXATOMS && iOff >=0 );
 
   real_t rCut = sim.eam_pot.cutoff;
   real_t rCut2 = (rCut+sim.atoms.neighborList.skinDistance)*(rCut+sim.atoms.neighborList.skinDistance);
@@ -1291,7 +1314,7 @@ void buildNeighborListKernel_thread(SimGpu sim)
   //get NL related data
   int iLid = tid;
   const int ldNeighborList = sim.atoms.neighborList.nMaxLocal; //leading dimension
-  assert(iLid<ldNeighborList);
+  gassert(iLid<ldNeighborList);
   int* neighborList = sim.atoms.neighborList.list;
   int nNeighbors = 0;
   sim.atoms.neighborList.lastR.x[iLid] = irx;
@@ -1311,7 +1334,7 @@ void buildNeighborListKernel_thread(SimGpu sim)
     for (int jAtom = 0; jAtom < sim.boxes.nAtoms[jBox]; jAtom++)
     {
       int jOff = jBox * MAXATOMS + jAtom;
-      assert(jOff < sim.boxes.nTotalBoxes * MAXATOMS  && jOff >=0 );
+      gassert(jOff < sim.boxes.nTotalBoxes * MAXATOMS  && jOff >=0 );
 
       real_t dx = irx - rx[jOff];
       real_t dy = iry - ry[jOff];
@@ -1323,7 +1346,7 @@ void buildNeighborListKernel_thread(SimGpu sim)
       // no divide by zero
       if (r2 <= rCut2 && r2 > 0.0)
       {
-         assert(nNeighbors < sim.atoms.neighborList.nMaxNeighbors); // TODO enlarge neighborlist (this should be fine for now)
+         gassert(nNeighbors < sim.atoms.neighborList.nMaxNeighbors); // TODO enlarge neighborlist (this should be fine for now)
          neighborList[nNeighbors * ldNeighborList + iLid ] = jOff;
          ++nNeighbors;
       }
@@ -1341,7 +1364,7 @@ void buildNeighborListKernel_thread(SimGpu sim)
 }
 
 /// Build the neighbor list for all boxes which are marked as dirty.
-extern "C"
+EXTERN_C
 void buildNeighborListGpu(SimGpu* sim, int method, int boundaryFlag)
 {
    NeighborListGpu* neighborList = &(sim->atoms.neighborList);
@@ -1350,12 +1373,12 @@ void buildNeighborListGpu(SimGpu* sim, int method, int boundaryFlag)
            emptyNeighborListGpu(sim, boundaryFlag);
 
            //int grid = (sim->a_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
-           int grid = (sim->a_list.n + 31)/ 32;
+           int grid = (sim->a_list.n + WARP_SIZE - 1)/ WARP_SIZE;
            const int packSize = NEIGHLIST_PACKSIZE;
            const int logPackSize = NEIGHLIST_PACKSIZE_LOG;
            const int memoryPackSize = KERNEL_PACKSIZE;
-           int block = packSize * 32;
-           cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
+           int block = packSize * WARP_SIZE;
+           hipDeviceSetCacheConfig(hipFuncCachePreferShared);
            real_t rCut = sim->eam_pot.cutoff;
            real_t rCut2 = (rCut+sim->atoms.neighborList.skinDistance)*(rCut+sim->atoms.neighborList.skinDistance);
            if(method == THREAD_ATOM_NL)
@@ -1364,33 +1387,33 @@ void buildNeighborListGpu(SimGpu* sim, int method, int boundaryFlag)
               int grid = (sim->a_list.n + (THREAD_ATOM_CTA-1))/ THREAD_ATOM_CTA;
               int block = THREAD_ATOM_CTA;
               if(boundaryFlag == BOUNDARY)
-                 buildNeighborListKernel_thread<BOUNDARY><<<grid, block>>>(*sim);
+                 hipLaunchKernelGGL((buildNeighborListKernel_thread<BOUNDARY>), dim3(grid), dim3(block), 0, 0, *sim);
               else if (boundaryFlag == INTERIOR)
-                 buildNeighborListKernel_thread<INTERIOR><<<grid, block >>>(*sim);
+                 hipLaunchKernelGGL((buildNeighborListKernel_thread<INTERIOR>), dim3(grid), dim3(block ), 0, 0, *sim);
               else {
-                 buildNeighborListKernel_thread<BOTH><<<grid, block>>>(*sim);
+                 hipLaunchKernelGGL((buildNeighborListKernel_thread<BOTH>), dim3(grid), dim3(block), 0, 0, *sim);
               }
 #else
               if(boundaryFlag == BOUNDARY)
-                 buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, 1, BOUNDARY><<<grid, block>>>(*sim, rCut2);
+                 hipLaunchKernelGGL((buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, 1, BOUNDARY>), dim3(grid), dim3(block), 0, 0, *sim, rCut2);
               else if (boundaryFlag == INTERIOR)
-                 buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, 1, INTERIOR><<<grid, block>>>(*sim, rCut2);
+                 hipLaunchKernelGGL((buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, 1, INTERIOR>), dim3(grid), dim3(block), 0, 0, *sim, rCut2);
               else {
-                 buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, 1, BOTH><<<grid, block>>>(*sim, rCut2);
+                 hipLaunchKernelGGL((buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, 1, BOTH>), dim3(grid), dim3(block), 0, 0, *sim, rCut2);
               }
 #endif
            }
            else if(method == WARP_ATOM_NL)
            {
                if(boundaryFlag == BOUNDARY)
-                   buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, memoryPackSize, BOUNDARY><<<grid, block>>>(*sim, rCut2);
+                   hipLaunchKernelGGL((buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, memoryPackSize, BOUNDARY>), dim3(grid), dim3(block), 0, 0, *sim, rCut2);
                else if (boundaryFlag == INTERIOR)
-                   buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, memoryPackSize, INTERIOR><<<grid, block>>>(*sim, rCut2);
+                   hipLaunchKernelGGL((buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, memoryPackSize, INTERIOR>), dim3(grid), dim3(block), 0, 0, *sim, rCut2);
                else
-                   buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, memoryPackSize, BOTH><<<grid, block>>>(*sim, rCut2);
+                   hipLaunchKernelGGL((buildNeighborListKernel_warp<MAXNEIGHBORLISTSIZE, packSize, logPackSize, memoryPackSize, BOTH>), dim3(grid), dim3(block), 0, 0, *sim, rCut2);
            }
 
-           cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+           hipDeviceSetCacheConfig(hipFuncCachePreferL1);
            neighborList->nStepsSinceLastBuild = 1;
            neighborList->updateNeighborListRequired = 0;
            neighborList->forceRebuildFlag = 0;
@@ -1400,13 +1423,13 @@ void buildNeighborListGpu(SimGpu* sim, int method, int boundaryFlag)
   CUDA_GET_LAST_ERROR
 }
 
-extern "C"
+EXTERN_C
 void emptyHashTableGpu(HashTableGpu* hashTable)
 {
    hashTable->nEntriesPut = 0;
 }
 
-extern "C"
+EXTERN_C
 void initHashTableGpu(HashTableGpu* hashTable, int nMaxEntries)
 {
 
@@ -1414,7 +1437,7 @@ void initHashTableGpu(HashTableGpu* hashTable, int nMaxEntries)
    hashTable->nEntriesPut = 0; //allocates a 5MB hashtable. This number is prime.
    hashTable->nEntriesGet = 0; //allocates a 5MB hashtable. This number is prime.
 
-   cudaMalloc(&(hashTable->offset), sizeof(int) * hashTable->nMaxEntries);
+   hipMalloc(&(hashTable->offset), sizeof(int) * hashTable->nMaxEntries);
 
   CUDA_GET_LAST_ERROR
 

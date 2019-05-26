@@ -126,10 +126,10 @@ HaloExchange* initAtomHaloExchange(Domain* domain, LinkCell* boxes)
    hh->recvBufM = (char*)comdMalloc(hh->bufCapacity);
 
    // pin memory
-   cudaHostRegister(hh->sendBufM, hh->bufCapacity, 0);
-   cudaHostRegister(hh->sendBufP, hh->bufCapacity, 0);
-   cudaHostRegister(hh->recvBufP, hh->bufCapacity, 0);
-   cudaHostRegister(hh->recvBufM, hh->bufCapacity, 0);
+   hipHostRegister(hh->sendBufM, hh->bufCapacity, 0);
+   hipHostRegister(hh->sendBufP, hh->bufCapacity, 0);
+   hipHostRegister(hh->recvBufP, hh->bufCapacity, 0);
+   hipHostRegister(hh->recvBufM, hh->bufCapacity, 0);
 
    hh->loadBuffer = loadAtomsBuffer;
    hh->unloadBuffer = unloadAtomsBuffer;
@@ -150,8 +150,8 @@ HaloExchange* initAtomHaloExchange(Domain* domain, LinkCell* boxes)
       parms->cellList[ii] = mkAtomCellList(boxes, (enum HaloFaceOrder)ii, parms->nCells[ii]);
 	  
       // copy cell list to gpu
-      cudaMalloc((void**)&parms->cellListGpu[ii], parms->nCells[ii] * sizeof(int));
-      cudaMemcpy(parms->cellListGpu[ii], parms->cellList[ii], parms->nCells[ii] * sizeof(int), cudaMemcpyHostToDevice);
+      hipMalloc((void**)&parms->cellListGpu[ii], parms->nCells[ii] * sizeof(int));
+      hipMemcpy(parms->cellListGpu[ii], parms->cellList[ii], parms->nCells[ii] * sizeof(int), hipMemcpyHostToDevice);
   
    }
    // allocate scan buf
@@ -161,9 +161,9 @@ HaloExchange* initAtomHaloExchange(Domain* domain, LinkCell* boxes)
    int partial_size = size/256 + 1;
    if (partial_size % 256 != 0) partial_size = ((partial_size + 255)/256)*256;
 
-   cudaMalloc((void**)&parms->d_natoms_buf, size * sizeof(int));
+   hipMalloc((void**)&parms->d_natoms_buf, size * sizeof(int));
    parms->h_natoms_buf = (int*) malloc( size * sizeof(int));
-   cudaMalloc((void**)&parms->d_partial_sums, partial_size * sizeof(int));
+   hipMalloc((void**)&parms->d_partial_sums, partial_size * sizeof(int));
 
    for (int ii=0; ii<6; ++ii)
    {
@@ -226,10 +226,10 @@ HaloExchange* initForceHaloExchange(Domain* domain, LinkCell* boxes, int useGPU)
    hh->recvBufM = (char*)comdMalloc(hh->bufCapacity);
 
    // pin memory
-   cudaHostRegister(hh->sendBufM, hh->bufCapacity, 0);
-   cudaHostRegister(hh->sendBufP, hh->bufCapacity, 0);
-   cudaHostRegister(hh->recvBufP, hh->bufCapacity, 0);
-   cudaHostRegister(hh->recvBufM, hh->bufCapacity, 0);
+   hipHostRegister(hh->sendBufM, hh->bufCapacity, 0);
+   hipHostRegister(hh->sendBufP, hh->bufCapacity, 0);
+   hipHostRegister(hh->recvBufP, hh->bufCapacity, 0);
+   hipHostRegister(hh->recvBufM, hh->bufCapacity, 0);
 
    ForceExchangeParms* parms = (ForceExchangeParms*)comdMalloc(sizeof(ForceExchangeParms));
 
@@ -246,16 +246,16 @@ HaloExchange* initForceHaloExchange(Domain* domain, LinkCell* boxes, int useGPU)
       parms->recvCells[ii] = mkForceRecvCellList(boxes, ii, parms->nCells[ii]);
 
       // copy cell list to gpu
-      cudaMalloc((void**)&parms->sendCellsGpu[ii], parms->nCells[ii] * sizeof(int));
-      cudaMalloc((void**)&parms->recvCellsGpu[ii], parms->nCells[ii] * sizeof(int));
-      cudaMemcpy(parms->sendCellsGpu[ii], parms->sendCells[ii], parms->nCells[ii] * sizeof(int), cudaMemcpyHostToDevice);
-      cudaMemcpy(parms->recvCellsGpu[ii], parms->recvCells[ii], parms->nCells[ii] * sizeof(int), cudaMemcpyHostToDevice);
+      hipMalloc((void**)&parms->sendCellsGpu[ii], parms->nCells[ii] * sizeof(int));
+      hipMalloc((void**)&parms->recvCellsGpu[ii], parms->nCells[ii] * sizeof(int));
+      hipMemcpy(parms->sendCellsGpu[ii], parms->sendCells[ii], parms->nCells[ii] * sizeof(int), hipMemcpyHostToDevice);
+      hipMemcpy(parms->recvCellsGpu[ii], parms->recvCells[ii], parms->nCells[ii] * sizeof(int), hipMemcpyHostToDevice);
 
       // allocate temp buf
       int size = parms->nCells[ii]+1;
       if (size % 256 != 0) size = ((size + 255)/256)*256;
-      cudaMalloc((void**)&parms->natoms_buf[ii], size * sizeof(int));
-      cudaMalloc((void**)&parms->partial_sums[ii], (size/256 + 1) * sizeof(int));
+      hipMalloc((void**)&parms->natoms_buf[ii], size * sizeof(int));
+      hipMalloc((void**)&parms->partial_sums[ii], (size/256 + 1) * sizeof(int));
    }
    
    hh->hashTable = NULL;
@@ -267,7 +267,7 @@ HaloExchange* initForceHaloExchange(Domain* domain, LinkCell* boxes, int useGPU)
 void destroyHaloExchange(HaloExchange** haloExchange)
 {
    (*haloExchange)->destroy((*haloExchange)->parms);
-   if((*haloExchange)->hashTable);
+   if((*haloExchange)->hashTable)
      destroyHashTable(&((*haloExchange)->hashTable));
    free((*haloExchange)->sendBufM);
    free((*haloExchange)->sendBufP);
@@ -432,8 +432,8 @@ int loadAtomsBuffer(void* vparms, void* data, int face, char* charBuf)
            nTotalAtomsCellList = compactCellsGpu(sim->gpu_atoms_buf, nCells, d_cellList, sim->gpu,  parms->d_natoms_buf, parms->d_partial_sums,shift,sim->boundary_stream);
 //           printf("gpu: %d\n",nTotalAtomsCellList);
 
-           cudaMemcpyAsync(charBuf, (void*)(sim->gpu_atoms_buf), nTotalAtomsCellList * sizeof(AtomMsg), cudaMemcpyDeviceToHost,sim->boundary_stream);
-           cudaStreamSynchronize(sim->boundary_stream);
+           hipMemcpyAsync(charBuf, (void*)(sim->gpu_atoms_buf), nTotalAtomsCellList * sizeof(AtomMsg), hipMemcpyDeviceToHost,sim->boundary_stream);
+           hipStreamSynchronize(sim->boundary_stream);
    }
    return nTotalAtomsCellList*sizeof(AtomMsg);
 }
@@ -498,10 +498,10 @@ void destroyAtomsExchange(void* vparms)
    {
       free(parms->pbcFactor[ii]);
       free(parms->cellList[ii]);
-      cudaFree(parms->cellListGpu[ii]);
+      hipFree(parms->cellListGpu[ii]);
    }
-   cudaFree(parms->d_natoms_buf);
-   cudaFree(parms->d_partial_sums);
+   hipFree(parms->d_natoms_buf);
+   hipFree(parms->d_partial_sums);
    free(parms->h_natoms_buf);
 }
 
@@ -708,10 +708,10 @@ void destroyForceExchange(void* vparms)
    {
       free(parms->sendCells[ii]);
       free(parms->recvCells[ii]);
-      cudaFree(parms->sendCellsGpu[ii]);
-      cudaFree(parms->recvCellsGpu[ii]);
-      cudaFree(parms->natoms_buf[ii]);
-      cudaFree(parms->partial_sums[ii]);
+      hipFree(parms->sendCellsGpu[ii]);
+      hipFree(parms->recvCellsGpu[ii]);
+      hipFree(parms->natoms_buf[ii]);
+      hipFree(parms->partial_sums[ii]);
    }
 }
 

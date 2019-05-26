@@ -215,9 +215,11 @@ Command parseCommandLine(int argc, char** argv)
    strcpy(cmd.method, "thread_atom");
    cmd.gpuAsync = 0;
    cmd.gpuProfile = 0;
+   cmd.singleGpuInstanceId = 0;
 
    cmd.ljInterpolation = 0;
    cmd.spline = 0;
+   cmd.usePairlist = 0;
 
    int help=0;
    // add arguments for processing.  Please update the html documentation too!
@@ -248,6 +250,7 @@ Command parseCommandLine(int argc, char** argv)
    addArg("ljInterpolation", 'I', 0, 'i', &(cmd.ljInterpolation), 0,   "compute Lennard-Jones potential using interpolation (gpu only)");
    addArg("spline", 'P', 0, 'i', &(cmd.spline), 0, "use splines for interpolation (gpu only)");
    addArg("usePairlist", 'L', 0, 'i', &(cmd.usePairlist), 0, "use pairlists for cta_cell method in Lennard-Jones computation");
+   addArg("singleGpuInstanceId", 'G', 1, 'i', &(cmd.singleGpuInstanceId), 0, "single gpu instance id");
 
    processArgs(argc,argv);
 
